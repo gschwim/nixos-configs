@@ -74,6 +74,60 @@ git push
 
 The target reboots fully configured. **Back up `~/.local/share/nixos-configs/host-keys/`** — those keys are the agenix decryption identities; if you lose them and re-install, every secret encrypted to that host must be re-keyed.
 
+## Custom installer ISO
+
+The flake exposes a `nixosConfigurations.installer` that builds a NixOS minimal ISO tuned for our workflow:
+
+- Console output mirrors VGA + serial (`ttyS0,115200n8`) — works in VMs and headless hardware.
+- sshd up by default, key-only auth, blushda's ed25519 pubkey embedded.
+- `schwim` user has passwordless sudo (installer is ephemeral and key-protected).
+- Bundles `git`, `vim`, `htop`, `nix-output-monitor`, `cryptsetup`.
+- NetworkManager left enabled (the upstream installer default — easiest path to wifi).
+- Live ISO root is writable as tmpfs (use `/home/schwim/` or `/tmp/` for staging). No persistent partition.
+
+### Building
+
+```bash
+nix --extra-experimental-features 'nix-command flakes' \
+    build .#nixosConfigurations.installer.config.system.build.isoImage
+# Output: result/iso/nixos-*-x86_64-linux.iso
+```
+
+**This requires a Linux build environment** (the ISO uses Linux derivations). Options:
+- Build on any running NixOS host (e.g. pleades, once installed). Simplest.
+- Configure a Linux remote builder on blushda (`/etc/nix/machines`) — most flexible.
+- Use `nix.linux-builder.enable = true` if you ever adopt nix-darwin.
+
+For the initial pleades re-install, use the stock NixOS 25.11 minimal ISO from <https://nixos.org/download/>. After pleades is up, build the custom ISO from pleades for all subsequent installs.
+
+### Flashing (same as stock ISO)
+
+```bash
+diskutil list                                       # find the USB
+diskutil unmountDisk /dev/diskN
+sudo dd if=result/iso/nixos-*-x86_64-linux.iso \
+        of=/dev/rdiskN bs=4m status=progress
+diskutil eject /dev/diskN
+```
+
+### VM use
+
+Attach `result/iso/nixos-*-x86_64-linux.iso` as a CD/DVD device to the VM, boot from it. Connect via serial (qemu: `-serial mon:stdio`) or wait for it to come up and SSH in (`ssh schwim@<vm-ip>`).
+
+### Iteration loop
+
+After tweaking `hosts/installer/default.nix`:
+
+```bash
+git add hosts/installer/default.nix
+git commit -m "installer: ..."
+git push
+# on pleades (or wherever you build):
+git pull
+nix build .#nixosConfigurations.installer.config.system.build.isoImage
+# re-flash the result
+```
+
 ## Manual install (fallback)
 
 The rest of this document describes the original step-by-step manual install workflow. Use it if you can't reach the target over SSH from blushda — e.g. installing from a USB on an offline machine.

@@ -31,6 +31,8 @@
     tcpdump
     wget
     tmux
+    git
+    lsof
   ];
 
   programs.neovim = {
