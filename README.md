@@ -31,7 +31,7 @@ Generates `~/.local/share/nixos-configs/host-keys/<host>_ed25519` (outside the r
    ```bash
    cd secrets
    nix --extra-experimental-features 'nix-command flakes' \
-       run github:ryantm/agenix -- -r
+       run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -r
    cd ..
    ```
 4. Commit + push:
@@ -106,7 +106,7 @@ For the initial pleades re-install, use the stock NixOS 25.11 minimal ISO from <
 diskutil list                                       # find the USB
 diskutil unmountDisk /dev/diskN
 sudo dd if=result/iso/nixos-*-x86_64-linux.iso \
-        of=/dev/rdiskN bs=4m status=progress
+        of=/dev/rdiskN bs=4M status=progress
 diskutil eject /dev/diskN
 ```
 
@@ -356,7 +356,7 @@ Back on blushda:
 ```bash
 cd /Users/schwim/src/nixos-configs/secrets
 nix --extra-experimental-features 'nix-command flakes' \
-    run github:ryantm/agenix -- -r
+    run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -r
 ```
 
 4. Commit + push:
@@ -428,6 +428,7 @@ See the comment block at the top of [secrets/secrets.nix](secrets/secrets.nix) f
 - **ZFS hostId** must match between pool-create time and runtime. The per-host file's `networking.hostId` is the source of truth. Run `sudo zgenhostid -f <hostId>` in the installer BEFORE disko (step 7). Don't change `networking.hostId` after install or rpool won't import. See recovery recipe below if you hit "pool was previously in use by another system" at first boot.
 - **`agenix -e` on an empty file fails** with EOF; `rm` the empty file first.
 - **`agenix` reads `secrets.nix` from cwd**, not from a repo-relative path; always `cd secrets` first.
+- **`agenix` only auto-discovers SSH keys.** The editor identity (blushda) is an age key at `~/.config/sops/age/keys.txt`, so every `agenix -e` / `-r` invocation needs `-i ~/.config/sops/age/keys.txt`. Without it: `age: error: no identity matched any of the recipients`.
 - **First boot before agenix bootstrap**: pleades's wifi won't work because the secret is encrypted only for blushda. Use wired/tether for the install, complete the agenix bootstrap (step 12), then switch to wifi.
 
 ### Recovering from a hostid mismatch
