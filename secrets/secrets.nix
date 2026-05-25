@@ -25,7 +25,8 @@
 #        cd /Users/schwim/src/nixos-configs/secrets
 #        rm -f wifi-secrets.age          # only if a 0-byte placeholder exists
 #        nix --extra-experimental-features 'nix-command flakes' \
-#            run github:ryantm/agenix -- -e wifi-secrets.age
+#            run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt \
+#                                         -e wifi-secrets.age
 #
 #      Your $EDITOR opens with an empty buffer. Enter ONE line:
 #        psk_canis_major=<the-actual-wifi-passphrase>
@@ -52,7 +53,7 @@
 #
 #        cd /Users/schwim/src/nixos-configs/secrets
 #        nix --extra-experimental-features 'nix-command flakes' \
-#            run github:ryantm/agenix -- -r
+#            run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -r
 #
 #      Commit the updated .age files.
 #
@@ -61,10 +62,15 @@
 #
 #   cd /Users/schwim/src/nixos-configs/secrets
 #   nix --extra-experimental-features 'nix-command flakes' \
-#       run github:ryantm/agenix -- -e wifi-secrets.age
+#       run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt \
+#                                    -e wifi-secrets.age
 #
 # GOTCHAS:
 # --------
+# - agenix only looks at SSH keys (~/.ssh/id_*) by default. Our editor
+#   identity is an age key at ~/.config/sops/age/keys.txt, so every agenix
+#   invocation needs `-i ~/.config/sops/age/keys.txt`. Without it you get:
+#     age: error: no identity matched any of the recipients
 # - agenix MUST be invoked from the directory containing secrets.nix.
 # - If a file in publicKeys list is a placeholder/invalid key, agenix's save
 #   step fails (malformed SSH recipient / failed to read header). Only put
@@ -81,10 +87,10 @@ let
   # ---- Host identities (each host's SSH host pubkey, post-install) ---------
   # Placeholders below — replace AFTER each host's first boot, then add the
   # variable to the publicKeys list of the secrets that host needs.
-  pleades = "ssh-ed25519 AAAA_REPLACE_WITH_PLEADES_HOST_PUBKEY";
+  pleades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoCf/2e719Y8SzpIc4clVYtde8HEeq+3oLIbtkWDkJ2";
   iris    = "ssh-ed25519 AAAA_REPLACE_WITH_IRIS_HOST_PUBKEY";
 
-  editors = [ blushda ];
+  editors = [ blushda pleades ];
 in {
   # During bootstrap, only blushda (the editor) can decrypt.
   # Once pleades has a real key above, change to:
