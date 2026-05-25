@@ -15,7 +15,9 @@
 # - Disables our home-manager baseline (no persistent /home on a live ISO).
 
 { config, lib, pkgs, modulesPath, ... }:
-{
+let
+  adminKeys = import ../../lib/admin-keys.nix;
+in {
   imports = [
     "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
   ];
@@ -48,12 +50,8 @@
   # - root:    what nixos-anywhere pivots to mid-install. (The installation-cd
   #            module marks the wheel group as passwordless-sudo by default;
   #            we ensure that's on.)
-  users.users.schwim.openssh.authorizedKeys.keys = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi2IaOSC8y928fh5BqIYnGTqqngr/W5URgRTnfOD5YA schwim@blushda.local"
-  ];
-  users.users.root.openssh.authorizedKeys.keys = [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi2IaOSC8y928fh5BqIYnGTqqngr/W5URgRTnfOD5YA schwim@blushda.local"
-  ];
+  users.users.schwim.openssh.authorizedKeys.keys = adminKeys;
+  users.users.root.openssh.authorizedKeys.keys   = adminKeys;
   security.sudo.wheelNeedsPassword = false;
 
   # Turn off our fleet baselines that conflict with installer defaults:
