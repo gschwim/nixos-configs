@@ -5,12 +5,16 @@
 #   scripts/install-host.sh <hostname> <target-ip>
 #
 # Assumes the target is booted into a NixOS installer (graphical or minimal)
-# with sshd running and reachable as root@<target-ip>.
+# with sshd running, your SSH key authorized for $INSTALL_USER (defaults to
+# $USER on this machine), and that user granted passwordless sudo. The
+# custom installer ISO built from this repo satisfies all three by default
+# for the `schwim` user.
 #
 # In the installer beforehand:
-#   sudo passwd root             # set a password
 #   sudo systemctl start sshd    # if not already running
 #   ip a                         # find the address
+#
+# Override the SSH user via env if needed: INSTALL_USER=nixos ./install-host.sh ...
 #
 # What this script does:
 #   1. Reads the host's networking.hostId from hosts/<name>/default.nix.
@@ -48,6 +52,7 @@ HOST_DIR="$REPO_ROOT/hosts/$HOSTNAME"
 HOST_KEY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/host-keys"
 HOST_KEY="$HOST_KEY_DIR/${HOSTNAME}_ed25519"
 STAGING="${TMPDIR:-/tmp}/nixos-anywhere-staging-$HOSTNAME"
+INSTALL_USER="${INSTALL_USER:-$USER}"
 
 # SSH options for installer connections. Installer ISOs are ephemeral —
 # every reboot regenerates the host key, so a stable known_hosts entry
@@ -85,10 +90,11 @@ fi
 # Destructive-action confirmation. nixos-anywhere will erase the target's
 # disk via disko — make sure we mean it.
 echo
-echo "About to install NixOS host '$HOSTNAME' onto root@$TARGET."
+echo "About to install NixOS host '$HOSTNAME' onto $INSTALL_USER@$TARGET."
 echo "  Flake:       $REPO_ROOT#$HOSTNAME"
 echo "  hostId:      $HOSTID"
 echo "  Host key:    $HOST_KEY"
+echo "  SSH as:      $INSTALL_USER (needs passwordless sudo on target)"
 echo "  ⚠️  This WIPES the target disk (via disko)."
 read -rp "Continue? (y/N) " ans
 [ "$ans" = "y" ] || [ "$ans" = "Y" ] || exit 1
@@ -100,7 +106,7 @@ chmod 700 "$HOST_KEY_DIR"
 
 if [ ! -f "$HOST_KEY" ]; then
   echo "Generating ed25519 host key for $HOSTNAME → $HOST_KEY"
-  ssh-keygen -t ed25519 -N "" -f "$HOST_KEY" -C "root@$HOSTNAME"
+  ssh-keygen -t ed25519 -N "" -f "$HOST_KEY" -C "ssh_host_ed25519_key@$HOSTNAME"
 else
   echo "Using existing host key at $HOST_KEY"
 fi
@@ -119,22 +125,39 @@ install -m 644 "${HOST_KEY}.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key.pub"
 
 # ----- prep installer's hostid ---------------------------------------------
 
-echo "Setting installer's hostid on $TARGET to $HOSTID …"
-ssh "${SSH_OPTS[@]}" "root@$TARGET" "
+echo "Preflight on $TARGET as $INSTALL_USER (sudo for root ops):"
+echo "  - set installer hostid to $HOSTID (for ZFS/disko)"
+echo "  - seed /root/.ssh/authorized_keys (nixos-anywhere pivots to root@ mid-install)"
+ssh "${SSH_OPTS[@]}" "$INSTALL_USER@$TARGET" "
   set -e
-  zgenhostid -fo /run/hostid $HOSTID
-  mount --bind /run/hostid /etc/hostid 2>/dev/null || true
+  sudo zgenhostid -fo /run/hostid $HOSTID
+  sudo mount --bind /run/hostid /etc/hostid 2>/dev/null || true
   hostid
+
+  sudo mkdir -p /root/.ssh
+  sudo chmod 700 /root/.ssh
+  # NixOS writes user-authorized keys to /etc/ssh/authorized_keys.d/<user>;
+  # nixos-anywhere only looks at ~/.ssh/authorized_keys, so it can't auto-copy.
+  # Try both sources; non-zero exit if neither exists.
+  if [ -r /etc/ssh/authorized_keys.d/$INSTALL_USER ]; then
+    sudo cp /etc/ssh/authorized_keys.d/$INSTALL_USER /root/.ssh/authorized_keys
+  elif [ -r \$HOME/.ssh/authorized_keys ]; then
+    sudo cp \$HOME/.ssh/authorized_keys /root/.ssh/authorized_keys
+  else
+    echo 'ERROR: no authorized_keys source found for $INSTALL_USER on target' >&2
+    exit 1
+  fi
+  sudo chmod 600 /root/.ssh/authorized_keys
 "
 
 # ----- run nixos-anywhere --------------------------------------------------
 
 echo
-echo "Invoking nixos-anywhere → root@$TARGET (flake .#$HOSTNAME) …"
+echo "Invoking nixos-anywhere → $INSTALL_USER@$TARGET (flake .#$HOSTNAME) …"
 nix --extra-experimental-features 'nix-command flakes' \
     run github:nix-community/nixos-anywhere -- \
     --flake "$REPO_ROOT#$HOSTNAME" \
-    --target-host "root@$TARGET" \
+    --target-host "$INSTALL_USER@$TARGET" \
     --generate-hardware-config nixos-generate-config "$HOST_DIR/hardware-configuration.nix" \
     --extra-files "$STAGING" \
     --ssh-option "StrictHostKeyChecking=no" \

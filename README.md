@@ -41,19 +41,22 @@ Generates `~/.local/share/nixos-configs/host-keys/<host>_ed25519` (outside the r
 
 ### Step 3 — Install
 
-On the target, boot the NixOS installer (graphical or minimal):
+On the target, boot the NixOS installer (the custom ISO from this flake authorizes blushda's key for `schwim` with passwordless sudo out of the box):
 
 ```bash
-sudo passwd root            # set a password
 sudo systemctl start sshd   # if not already running
 ip a                        # note the IPv4 address
 ```
+
+(If you booted the stock NixOS ISO instead, you'll need to add blushda's pubkey to `~/.ssh/authorized_keys` for the `nixos` user and run `INSTALL_USER=nixos scripts/install-host.sh ...` below — or set `~/.ssh/authorized_keys` for root and pass `INSTALL_USER=root`.)
 
 On blushda:
 
 ```bash
 scripts/install-host.sh <host> <target-ip>
 ```
+
+The script SSHes in as `$USER` (override with `INSTALL_USER=...`) and uses `sudo` for the parts that need root. The target user must have passwordless sudo.
 
 `install-host.sh` wraps [nixos-anywhere](https://github.com/nix-community/nixos-anywhere) and handles the rest end-to-end:
 

@@ -31,18 +31,27 @@
   # what we want for headless VMs.
   boot.kernelParams = [ "console=tty1" "console=ttyS0,115200n8" ];
 
-  # SSH: key-only, no root login.
+  # SSH: key-only. Root login is allowed by key (no password) because
+  # nixos-anywhere internally pivots to `root@target` to run disko/install
+  # phases — see the kexec/installer branch in nixos-anywhere.sh. Without
+  # this, every non-root install fails partway through.
   services.openssh.enable = true;
   services.openssh.settings = {
     PasswordAuthentication = lib.mkForce false;
-    PermitRootLogin        = lib.mkForce "no";
+    PermitRootLogin        = lib.mkForce "prohibit-password";
     KbdInteractiveAuthentication = lib.mkForce false;
   };
 
-  # Authorize blushda's ed25519 key for the schwim user (defined in
-  # modules/base/default.nix). The installation-cd module marks the wheel
-  # group as passwordless-sudo by default; we ensure that's on.
+  # Authorize blushda's ed25519 key for both schwim and root.
+  # - schwim:  what install-host.sh uses for its preflight (sudo for the
+  #            handful of root operations).
+  # - root:    what nixos-anywhere pivots to mid-install. (The installation-cd
+  #            module marks the wheel group as passwordless-sudo by default;
+  #            we ensure that's on.)
   users.users.schwim.openssh.authorizedKeys.keys = [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi2IaOSC8y928fh5BqIYnGTqqngr/W5URgRTnfOD5YA schwim@blushda.local"
+  ];
+  users.users.root.openssh.authorizedKeys.keys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILi2IaOSC8y928fh5BqIYnGTqqngr/W5URgRTnfOD5YA schwim@blushda.local"
   ];
   security.sudo.wheelNeedsPassword = false;
