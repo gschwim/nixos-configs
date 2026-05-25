@@ -1,9 +1,12 @@
-{ config, ... }:
+{ config, inputs, ... }:
 {
-  imports = [ ./hardware-configuration.nix ];
+  imports = [
+    inputs.nixos-hardware.nixosModules.lenovo-thinkpad-p1
+    ./hardware-configuration.nix
+  ];
 
   networking.hostName = "pleades";
-  networking.hostId   = "deadbeef";          # 8-hex, unique per host (ZFS)
+  networking.hostId   = "a4cc034f";          # 8-hex, unique per host (ZFS)
   time.timeZone       = "America/Phoenix";
 
   my.disko = {

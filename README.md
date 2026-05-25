@@ -5,7 +5,80 @@ Hosts currently defined: `pleades` (Lenovo Thinkpad P1 Gen2), `iris` (headless s
 
 The per-host file at [hosts/`<name>`/default.nix](hosts/) is the only file edited per host. Everything else is shared modules under [modules/](modules/).
 
-## Installing a host from scratch (baremetal)
+## Provisioning a host (the fast path)
+
+Three scripts, run in order. The same flow works for first installs and re-installs.
+
+### Step 1 — Scaffold the host (skip if the host already exists)
+
+```bash
+scripts/new-host.sh <host> <type>      # type = server | desktop
+```
+
+Creates `hosts/<host>/{default.nix,hardware-configuration.nix}` from the matching template with a random `hostId`. Prints the line to add to `flake.nix`. Then edit `hosts/<host>/default.nix` and confirm: disk device, NIC name, static IP, toggles.
+
+### Step 2 — Pre-stage agenix recipient (skip if host needs no secrets)
+
+```bash
+scripts/gen-host-key.sh <host>
+```
+
+Generates `~/.local/share/nixos-configs/host-keys/<host>_ed25519` (outside the repo, never committed) and prints the pubkey. Then:
+
+1. Paste the pubkey as the value of `<host>` in `secrets/secrets.nix`.
+2. Add `<host>` to the `publicKeys` list of every secret it needs (e.g. `wifi-secrets.age`).
+3. Re-key:
+   ```bash
+   cd secrets
+   nix --extra-experimental-features 'nix-command flakes' \
+       run github:ryantm/agenix -- -r
+   cd ..
+   ```
+4. Commit + push:
+   ```bash
+   git add -A && git commit -m "secrets: add <host>" && git push
+   ```
+
+### Step 3 — Install
+
+On the target, boot the NixOS installer (graphical or minimal):
+
+```bash
+sudo passwd root            # set a password
+sudo systemctl start sshd   # if not already running
+ip a                        # note the IPv4 address
+```
+
+On blushda:
+
+```bash
+scripts/install-host.sh <host> <target-ip>
+```
+
+`install-host.sh` wraps [nixos-anywhere](https://github.com/nix-community/nixos-anywhere) and handles the rest end-to-end:
+
+- Reads the host's `networking.hostId` from its per-host file.
+- Sets the installer's hostid before disko (no more first-boot ZFS dance).
+- Stages the pre-generated SSH host key into `/etc/ssh/` on the target (so agenix decryption works on first boot — no second rebuild needed).
+- Invokes nixos-anywhere: runs disko, pulls a real `hardware-configuration.nix` back into the flake, copies the closure, installs.
+- Uses `StrictHostKeyChecking=no` for installer connections (ephemeral fingerprints; expected to change each boot).
+- Prompts for confirmation before doing anything destructive.
+
+### Step 4 — Commit the generated hardware-configuration.nix
+
+```bash
+git add hosts/<host>/hardware-configuration.nix
+git commit -m "<host>: hardware-configuration.nix from install"
+git push
+```
+
+The target reboots fully configured. **Back up `~/.local/share/nixos-configs/host-keys/`** — those keys are the agenix decryption identities; if you lose them and re-install, every secret encrypted to that host must be re-keyed.
+
+## Manual install (fallback)
+
+The rest of this document describes the original step-by-step manual install workflow. Use it if you can't reach the target over SSH from blushda — e.g. installing from a USB on an offline machine.
+
+## Installing a host from scratch (baremetal, manual)
 
 The steps below assume installing `pleades` on a fresh Thinkpad P1 Gen2 from blushda (the authoring Mac). For `iris`, substitute `iris` everywhere and adjust the disk path / interface names.
 
@@ -30,10 +103,10 @@ Pick ONE:
 
 ```bash
 cd /Users/schwim/src/nixos-configs
-git remote add origin https://github.com/gschwim/nixos-configs.git   # one-time only
+git remote add origin git@github.com:gschwim/nixos-configs.git   # one-time only
 git add -A
 git commit -m "initial scaffold"
-git push -u origin main
+git push -u origin master
 ```
 
 **B. Copy to a USB stick** (offline path):
@@ -138,12 +211,23 @@ Expect to see `nvme0n1` of the correct size. If not, edit `hosts/pleades/default
 
 ### 7. Partition + format with disko
 
+**Important:** set the installer's hostid to match this host's `networking.hostId` BEFORE running disko. Otherwise the ZFS pool is born with the installer's hostid and won't import on first boot. (Look up the host's `hostId` in `hosts/<host>/default.nix`.)
+
 ```bash
+# Substitute the host's actual hostId value (e.g. deadbeef for pleades).
+# The live ISO's /etc is read-only, so write to /run and bind-mount.
+sudo zgenhostid -fo /run/hostid deadbeef
+sudo mount --bind /run/hostid /etc/hostid
+hostid                        # verify it prints deadbeef
+
+# Now create the pool. It will be born with the right hostid.
 sudo nix --extra-experimental-features 'nix-command flakes' \
     run github:nix-community/disko -- \
     --mode disko \
     --flake /tmp/nixos-configs#pleades
 ```
+
+If you forgot the `zgenhostid` step and got "pool was previously in use by another system" on first boot, see [Recovering from a hostid mismatch](#recovering-from-a-hostid-mismatch) below.
 
 Disko partitions `/dev/nvme0n1`, creates the rpool, makes the datasets, and mounts everything under `/mnt`. Verify:
 
@@ -287,7 +371,33 @@ See the comment block at the top of [secrets/secrets.nix](secrets/secrets.nix) f
 
 - **`nix flake check` requires files be `git add`-ed.** Untracked files are invisible to the flake. Always `git add -A` after creating new files, even before committing.
 - **Disko erases the target disk with no prompt.** Triple-check `lsblk` output before step 7.
-- **ZFS hostId** must match between install time and runtime. The per-host file's `networking.hostId` is the source of truth; don't change it after install or rpool won't import.
+- **ZFS hostId** must match between pool-create time and runtime. The per-host file's `networking.hostId` is the source of truth. Run `sudo zgenhostid -f <hostId>` in the installer BEFORE disko (step 7). Don't change `networking.hostId` after install or rpool won't import. See recovery recipe below if you hit "pool was previously in use by another system" at first boot.
 - **`agenix -e` on an empty file fails** with EOF; `rm` the empty file first.
 - **`agenix` reads `secrets.nix` from cwd**, not from a repo-relative path; always `cd secrets` first.
 - **First boot before agenix bootstrap**: pleades's wifi won't work because the secret is encrypted only for blushda. Use wired/tether for the install, complete the agenix bootstrap (step 12), then switch to wifi.
+
+### Recovering from a hostid mismatch
+
+If first boot fails with `cannot import 'rpool': pool was previously in use by another system`, boot the installer USB and do this once. Substitute the host's actual `hostId` value from `hosts/<host>/default.nix`.
+
+```bash
+# 1. Force-import past the safety check.
+sudo zpool import -f rpool
+
+# 2. Set the installer's hostid to match the installed system.
+#    The live ISO's /etc is read-only, so write to /run and bind-mount.
+sudo zgenhostid -fo /run/hostid deadbeef
+sudo mount --bind /run/hostid /etc/hostid
+hostid                        # verify it prints deadbeef
+
+# 3. Re-export, then plain re-import — this bakes the new hostid
+#    into the pool's metadata.
+sudo zpool export rpool
+sudo zpool import rpool
+
+# 4. Clean export so the next boot finds a tidy pool.
+sudo zpool export rpool
+
+# 5. Reboot, remove the USB during POST.
+sudo reboot
+```
