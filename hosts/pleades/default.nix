@@ -6,7 +6,7 @@
   ];
 
   # embiggen the boot loader!
-  boot.loader.systemd-boot.consoleMode = "0";
+  boot.loader.systemd-boot.consoleMode = "1";
 
   networking.hostName = "pleades";
   networking.hostId   = "a4cc034f";          # 8-hex, unique per host (ZFS)
