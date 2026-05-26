@@ -26,15 +26,13 @@ in {
     # 2. Tell logind to ignore the events that would *initiate* a suspend.
     #    Without this, logind wall-broadcasts "The system will suspend now!"
     #    before the masked target fails — which is the noise you keep seeing.
-    services.logind = {
-      lidSwitch              = "ignore";
-      lidSwitchExternalPower = "ignore";
-      lidSwitchDocked        = "ignore";
-      extraConfig = ''
-        HandleSuspendKey=ignore
-        HandleHibernateKey=ignore
-        IdleAction=ignore
-      '';
+    services.logind.settings.Login = {
+      HandleLidSwitch              = "ignore";
+      HandleLidSwitchExternalPower = "ignore";
+      HandleLidSwitchDocked        = "ignore";
+      HandleSuspendKey             = "ignore";
+      HandleHibernateKey           = "ignore";
+      IdleAction                   = "ignore";
     };
 
     # 3. GNOME's settings-daemon power plugin has its own idle-suspend logic
