@@ -62,6 +62,10 @@ in {
     fd
     curl
     difftastic
+    # standalone home-manager CLI for per-user dotfile management
+    # (the NixOS-module variant is wired up in modules/home-manager.nix
+    # but defaults off — users own their own HM, not the system flake).
+    home-manager
   ];
 
   programs.neovim = {
