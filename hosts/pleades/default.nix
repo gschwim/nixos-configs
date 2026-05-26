@@ -12,6 +12,10 @@
   networking.hostId   = "a4cc034f";          # 8-hex, unique per host (ZFS)
   time.timeZone       = "America/Phoenix";
 
+  # Acting as a 24/7 server (incus host), even though the hardware is a
+  # laptop. Drives preventSleep on by default and any future server defaults.
+  my.host.role = "server";
+
   my.disko = {
     enable   = true;
     disk     = "/dev/nvme0n1";               # confirm before running disko
@@ -40,7 +44,7 @@
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;
   my.services.incus.enable     = true;       # flip off when laptop leaves the cluster
-  my.power.preventSleep.enable = true;
+  # preventSleep is on by default via my.host.role = "server" above.
 
   system.stateVersion = "25.11";
 }

@@ -6,6 +6,8 @@
   networking.hostId   = "feedface";          # 8-hex, unique per host (ZFS)
   time.timeZone       = "America/Phoenix";
 
+  my.host.role = "server";
+
   my.disko = {
     enable   = true;
     disk     = "/dev/sda";                   # confirm at install

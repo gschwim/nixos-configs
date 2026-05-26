@@ -13,6 +13,8 @@
   networking.hostId   = "@HOSTID@";          # 8-hex, unique per host (ZFS)
   time.timeZone       = "America/Phoenix";
 
+  my.host.role = "desktop";
+
   my.disko = {
     enable   = true;
     disk     = "/dev/nvme0n1";               # confirm before install
@@ -43,7 +45,10 @@
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;
   # my.services.incus.enable     = true;     # uncomment if joining an incus cluster
-  # my.power.preventSleep.enable = true;     # if laptop is acting as a server
+  # If this desktop should also act as an always-on server, flip the role:
+  #   my.host.role = "server";                # gives preventSleep + server defaults
+  # Or just disable sleep without changing role:
+  #   my.power.preventSleep.enable = true;
 
   system.stateVersion = "25.11";
 }
