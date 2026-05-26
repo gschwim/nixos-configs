@@ -6,6 +6,7 @@
     ./networking
     ./networking/static.nix
     ./networking/wireless.nix
+    ./networking/wifi-profiles.nix
     ./desktop/gnome.nix
     ./services/openssh.nix
     ./services/xrdp.nix

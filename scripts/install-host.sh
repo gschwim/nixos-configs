@@ -160,8 +160,14 @@ nix --extra-experimental-features 'nix-command flakes' \
     --target-host "$INSTALL_USER@$TARGET" \
     --generate-hardware-config nixos-generate-config "$HOST_DIR/hardware-configuration.nix" \
     --extra-files "$STAGING" \
+    --build-on remote \
     --ssh-option "StrictHostKeyChecking=no" \
     --ssh-option "UserKnownHostsFile=/dev/null"
+
+# --build-on remote: blushda is darwin and can't build x86_64-linux closures.
+# nixos-anywhere's default --build-on auto would otherwise run a probe
+# derivation that prints a scary "required ... but I am darwin" error before
+# silently falling back to remote anyway. Skipping the probe by being explicit.
 
 # ----- postflight ----------------------------------------------------------
 

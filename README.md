@@ -108,8 +108,8 @@ For the initial pleades re-install, use the stock NixOS 25.11 minimal ISO from <
 ```bash
 diskutil list                                       # find the USB
 diskutil unmountDisk /dev/diskN
-sudo dd if=result/iso/nixos-*-x86_64-linux.iso \
-        of=/dev/rdiskN bs=4M status=progress
+sudo dd bs=4M conv=fsync oflag=direct status=progress \
+    if=<path-to-image> of=/dev/sdX
 diskutil eject /dev/diskN
 ```
 
