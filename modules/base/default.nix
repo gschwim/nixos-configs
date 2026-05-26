@@ -57,6 +57,11 @@ in {
     tmux
     git
     lsof
+    tlrc
+    dust
+    fd
+    curl
+    difftastic
   ];
 
   programs.neovim = {

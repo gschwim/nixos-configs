@@ -27,6 +27,15 @@
   # don't declare it here and configure via nmcli post-boot.
   my.networking.networkmanager.enable = true;
 
+  my.network.static = {
+  enable       = true;
+  interface    = "enp0s20f0u1:";                   # confirm at install
+  address      = "172.16.1.249";           # placeholder — choose real value
+  prefixLength = 24;
+  gateway      = "172.16.1.254";
+  nameservers  = [ "172.16.1.253" ];
+  };
+
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;
