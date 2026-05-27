@@ -31,9 +31,15 @@
   # don't declare it here and configure via nmcli post-boot.
   my.networking.networkmanager.enable = true;
 
+  systemd.network.links."10-usb-ethernet" = {
+    matchConfig.MACAddress = "00:50:b6:e5:48:99";    # paste from step 1
+    linkConfig.Name        = "ethstatic";             # whatever you want to call it
+  };
+
+
   my.network.static = {
   enable       = true;
-  interface    = "enp0s20f0u1";                   # confirm at install
+  interface    = "ethstatic0";                   # confirm at install
   address      = "172.16.1.249";           # placeholder — choose real value
   prefixLength = 24;
   gateway      = "172.16.1.254";
