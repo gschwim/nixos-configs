@@ -74,18 +74,22 @@ in {
       ++ map (n: "interface-name:${n}") (staticIfaces ++ incusIfaces)
       ++ alwaysUnmanagedGlobs
     ));
+
+    # Don't route via interfaces that lost carrier — otherwise a multi-homed
+    # host with a higher-metric fallback (wifi behind wired, etc.) keeps
+    # sending traffic out the dead iface because Linux's default is to honor
+    # linkdown routes. Single-homed hosts are unaffected.
+    boot.kernel.sysctl = {
+      "net.ipv4.conf.all.ignore_routes_with_linkdown"     = 1;
+      "net.ipv4.conf.default.ignore_routes_with_linkdown" = 1;
+      "net.ipv6.conf.all.ignore_routes_with_linkdown"     = 1;
+      "net.ipv6.conf.default.ignore_routes_with_linkdown" = 1;
+    };
+
+
   };
 
-  # Don't route via interfaces that lost carrier — otherwise a multi-homed
-  # host with a higher-metric fallback (wifi behind wired, etc.) keeps
-  # sending traffic out the dead iface because Linux's default is to honor
-  # linkdown routes. Single-homed hosts are unaffected.
-  boot.kernel.sysctl = {
-    "net.ipv4.conf.all.ignore_routes_with_linkdown"     = 1;
-    "net.ipv4.conf.default.ignore_routes_with_linkdown" = 1;
-    "net.ipv6.conf.all.ignore_routes_with_linkdown"     = 1;
-    "net.ipv6.conf.default.ignore_routes_with_linkdown" = 1;
-  };
+
 
 
 }
