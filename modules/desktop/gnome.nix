@@ -28,5 +28,41 @@ in {
     programs.firefox.enable = true;
 
     environment.systemPackages = with pkgs; [ gnome-remote-desktop ];
+
+    # Fleet-wide GNOME defaults. Applied via dconf's system database, so
+    # every user inherits these on first login but can still override per-
+    # user with gsettings / GNOME Settings. NOT locks — these are defaults,
+    # not policy.
+    programs.dconf.profiles.user.databases = [{
+      settings = with lib.gvariant; {
+        "org/gnome/desktop/peripherals/touchpad" = {
+          natural-scroll               = mkBoolean false;
+          tap-to-click                 = mkBoolean true;
+          two-finger-scrolling-enabled = mkBoolean true;
+          edge-scrolling-enabled       = mkBoolean false;
+          click-method                 = "fingers";
+          speed                        = mkDouble 0.35;
+        };
+
+        "org/gnome/desktop/peripherals/mouse" = {
+          natural-scroll = mkBoolean false;
+          speed          = mkDouble 0.35;
+          accel-profile  = "default";
+        };
+
+        "org/gnome/desktop/interface" = {
+          color-scheme = "prefer-dark";
+        };
+
+        "org/gnome/desktop/screensaver" = {
+          lock-enabled = mkBoolean true;
+          lock-delay   = mkUint32 300;
+        };
+
+        "org/gnome/desktop/notifications" = {
+          show-in-lock-screen = mkBoolean false;
+        };
+      };
+    }];
   };
 }
