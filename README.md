@@ -1,7 +1,7 @@
 # nixos-configs
 
 Flakes-based NixOS configurations for multiple hosts.
-Hosts currently defined: `pleades` (Lenovo Thinkpad P1 Gen2), `iris` (headless server).
+Hosts currently defined: `pleiades` (Lenovo Thinkpad P1 Gen2), `iris` (headless server).
 
 The per-host file at [hosts/`<name>`/default.nix](hosts/) is the only file edited per host. Everything else is shared modules under [modules/](modules/).
 
@@ -97,11 +97,11 @@ nix --extra-experimental-features 'nix-command flakes' \
 ```
 
 **This requires a Linux build environment** (the ISO uses Linux derivations). Options:
-- Build on any running NixOS host (e.g. pleades, once installed). Simplest.
+- Build on any running NixOS host (e.g. pleiades, once installed). Simplest.
 - Configure a Linux remote builder on blushda (`/etc/nix/machines`) — most flexible.
 - Use `nix.linux-builder.enable = true` if you ever adopt nix-darwin.
 
-For the initial pleades re-install, use the stock NixOS 25.11 minimal ISO from <https://nixos.org/download/>. After pleades is up, build the custom ISO from pleades for all subsequent installs.
+For the initial pleiades re-install, use the stock NixOS 25.11 minimal ISO from <https://nixos.org/download/>. After pleiades is up, build the custom ISO from pleiades for all subsequent installs.
 
 ### Flashing (same as stock ISO)
 
@@ -125,7 +125,7 @@ After tweaking `hosts/installer/default.nix`:
 git add hosts/installer/default.nix
 git commit -m "installer: ..."
 git push
-# on pleades (or wherever you build):
+# on pleiades (or wherever you build):
 git pull
 nix build .#nixosConfigurations.installer.config.system.build.isoImage
 # re-flash the result
@@ -137,7 +137,7 @@ The rest of this document describes the original step-by-step manual install wor
 
 ## Installing a host from scratch (baremetal, manual)
 
-The steps below assume installing `pleades` on a fresh Thinkpad P1 Gen2 from blushda (the authoring Mac). For `iris`, substitute `iris` everywhere and adjust the disk path / interface names.
+The steps below assume installing `pleiades` on a fresh Thinkpad P1 Gen2 from blushda (the authoring Mac). For `iris`, substitute `iris` everywhere and adjust the disk path / interface names.
 
 ### 0. Prerequisites on blushda (the Mac)
 
@@ -148,7 +148,7 @@ cd /Users/schwim/src/nixos-configs
 nix --extra-experimental-features 'nix-command flakes' flake check --no-build
 
 # If you haven't yet set up the agenix wifi secret, follow the recipe in
-# secrets/secrets.nix top-of-file. Do this BEFORE installing pleades only
+# secrets/secrets.nix top-of-file. Do this BEFORE installing pleiades only
 # if you plan to rely on wifi at install time (you can also use ethernet).
 ```
 
@@ -196,9 +196,9 @@ sudo dd if=/path/to/nixos-minimal-25.11-x86_64-linux.iso \
 diskutil eject /dev/diskN
 ```
 
-### 3. Boot the installer on pleades
+### 3. Boot the installer on pleiades
 
-1. Insert the installer USB into pleades.
+1. Insert the installer USB into pleiades.
 2. Power on. Press **F12** as the Lenovo logo appears to get the boot menu.
 3. Select the USB device. (If it doesn't appear: enter **F1** BIOS setup → Security → Secure Boot → Disabled; also Startup → UEFI/Legacy → UEFI Only.)
 4. Wait for the NixOS installer to drop you at a root shell.
@@ -256,13 +256,13 @@ cd /tmp/nixos-configs
 
 ### 6. Verify the target disk path
 
-The disko config in [hosts/pleades/default.nix](hosts/pleades/default.nix) uses `/dev/nvme0n1`. Confirm this matches what's actually present:
+The disko config in [hosts/pleiades/default.nix](hosts/pleiades/default.nix) uses `/dev/nvme0n1`. Confirm this matches what's actually present:
 
 ```bash
 lsblk
 ```
 
-Expect to see `nvme0n1` of the correct size. If not, edit `hosts/pleades/default.nix` to set the right device path before continuing.
+Expect to see `nvme0n1` of the correct size. If not, edit `hosts/pleiades/default.nix` to set the right device path before continuing.
 
 ⚠️  **The next step erases everything on the target disk.** No prompt, no confirmation. Be sure.
 
@@ -271,7 +271,7 @@ Expect to see `nvme0n1` of the correct size. If not, edit `hosts/pleades/default
 **Important:** set the installer's hostid to match this host's `networking.hostId` BEFORE running disko. Otherwise the ZFS pool is born with the installer's hostid and won't import on first boot. (Look up the host's `hostId` in `hosts/<host>/default.nix`.)
 
 ```bash
-# Substitute the host's actual hostId value (e.g. deadbeef for pleades).
+# Substitute the host's actual hostId value (e.g. deadbeef for pleiades).
 # The live ISO's /etc is read-only, so write to /run and bind-mount.
 sudo zgenhostid -fo /run/hostid deadbeef
 sudo mount --bind /run/hostid /etc/hostid
@@ -281,7 +281,7 @@ hostid                        # verify it prints deadbeef
 sudo nix --extra-experimental-features 'nix-command flakes' \
     run github:nix-community/disko -- \
     --mode disko \
-    --flake /tmp/nixos-configs#pleades
+    --flake /tmp/nixos-configs#pleiades
 ```
 
 If you forgot the `zgenhostid` step and got "pool was previously in use by another system" on first boot, see [Recovering from a hostid mismatch](#recovering-from-a-hostid-mismatch) below.
@@ -296,7 +296,7 @@ ls /mnt/boot
 
 ### 8. Generate hardware-configuration.nix for this hardware
 
-The stub at `hosts/pleades/hardware-configuration.nix` is a placeholder. Replace it with the real one generated against this exact machine:
+The stub at `hosts/pleiades/hardware-configuration.nix` is a placeholder. Replace it with the real one generated against this exact machine:
 
 ```bash
 sudo nixos-generate-config --no-filesystems --root /mnt
@@ -304,13 +304,13 @@ sudo nixos-generate-config --no-filesystems --root /mnt
 # That writes to /mnt/etc/nixos/hardware-configuration.nix.
 # Copy it into the flake, replacing the stub:
 sudo cp /mnt/etc/nixos/hardware-configuration.nix \
-        /tmp/nixos-configs/hosts/pleades/hardware-configuration.nix
+        /tmp/nixos-configs/hosts/pleiades/hardware-configuration.nix
 
 # Commit + push so blushda gets the change too.
 cd /tmp/nixos-configs
-git add hosts/pleades/hardware-configuration.nix
+git add hosts/pleiades/hardware-configuration.nix
 git -c user.email='schwim@7e7.co' -c user.name='schwim' \
-    commit -m "pleades: hardware-configuration.nix from first install"
+    commit -m "pleiades: hardware-configuration.nix from first install"
 git push    # if you used the git remote path
 ```
 
@@ -319,7 +319,7 @@ git push    # if you used the git remote path
 ### 9. Install
 
 ```bash
-sudo nixos-install --flake /tmp/nixos-configs#pleades
+sudo nixos-install --flake /tmp/nixos-configs#pleiades
 ```
 
 This builds the system in the flake's nixpkgs (25.11), copies the closure to `/mnt/nix`, and installs the bootloader. It prompts for the **root password** at the very end — set one.
@@ -339,21 +339,21 @@ sudo reboot
 # Remove the USB during POST.
 ```
 
-Log in as `schwim` at the GDM greeter (pleades) or console (iris).
+Log in as `schwim` at the GDM greeter (pleiades) or console (iris).
 
 ### 12. Bootstrap agenix for this host
 
-The wifi secret is currently encrypted only for blushda. Pleades needs its own SSH host key added so it can decrypt. From pleades:
+The wifi secret is currently encrypted only for blushda. Pleiades needs its own SSH host key added so it can decrypt. From pleiades:
 
 ```bash
 cat /etc/ssh/ssh_host_ed25519_key.pub
-# Copy the full "ssh-ed25519 AAAA... root@pleades" line
+# Copy the full "ssh-ed25519 AAAA... root@pleiades" line
 ```
 
 Back on blushda:
 
-1. Open [secrets/secrets.nix](secrets/secrets.nix), paste the pubkey as the value of `pleades`.
-2. Change the last line from `editors` to `editors ++ [ pleades ]`.
+1. Open [secrets/secrets.nix](secrets/secrets.nix), paste the pubkey as the value of `pleiades`.
+2. Change the last line from `editors` to `editors ++ [ pleiades ]`.
 3. Re-encrypt:
 
 ```bash
@@ -367,16 +367,16 @@ nix --extra-experimental-features 'nix-command flakes' \
 ```bash
 cd /Users/schwim/src/nixos-configs
 git add secrets/
-git commit -m "secrets: add pleades host key, re-key wifi-secrets"
+git commit -m "secrets: add pleiades host key, re-key wifi-secrets"
 git push
 ```
 
-5. On pleades, pull + rebuild to activate the now-decryptable secret:
+5. On pleiades, pull + rebuild to activate the now-decryptable secret:
 
 ```bash
 cd /tmp/nixos-configs   # or wherever you cloned it
 git pull
-sudo nixos-rebuild switch --flake .#pleades
+sudo nixos-rebuild switch --flake .#pleiades
 ```
 
 After the rebuild, `/run/agenix/wifi-secrets` exists (root-readable only) and wpa_supplicant can authenticate to Canis Major.
@@ -401,7 +401,7 @@ sudo ls -la /run/agenix/
 ss -tlnp | grep 8443
 ```
 
-If you're joining `pleades` to an existing incus cluster, run `incus cluster join` interactively per the incus docs (cluster membership is incus-level state, not NixOS-level).
+If you're joining `pleiades` to an existing incus cluster, run `incus cluster join` interactively per the incus docs (cluster membership is incus-level state, not NixOS-level).
 
 ## Day-to-day rebuilds
 
@@ -410,14 +410,14 @@ After the initial install, all changes flow through git:
 ```bash
 # On blushda: edit something, commit, push.
 cd /Users/schwim/src/nixos-configs
-# ... edit hosts/pleades/default.nix or a module ...
-git add -A && git commit -m "pleades: enable foo"
+# ... edit hosts/pleiades/default.nix or a module ...
+git add -A && git commit -m "pleiades: enable foo"
 git push
 
-# On pleades: pull and rebuild.
+# On pleiades: pull and rebuild.
 cd /path/to/checkout
 git pull
-sudo nixos-rebuild switch --flake .#pleades
+sudo nixos-rebuild switch --flake .#pleiades
 ```
 
 ## Editing secrets
@@ -432,7 +432,7 @@ See the comment block at the top of [secrets/secrets.nix](secrets/secrets.nix) f
 - **`agenix -e` on an empty file fails** with EOF; `rm` the empty file first.
 - **`agenix` reads `secrets.nix` from cwd**, not from a repo-relative path; always `cd secrets` first.
 - **`agenix` only auto-discovers SSH keys.** The editor identity (blushda) is an age key at `~/.config/sops/age/keys.txt`, so every `agenix -e` / `-r` invocation needs `-i ~/.config/sops/age/keys.txt`. Without it: `age: error: no identity matched any of the recipients`.
-- **First boot before agenix bootstrap**: pleades's wifi won't work because the secret is encrypted only for blushda. Use wired/tether for the install, complete the agenix bootstrap (step 12), then switch to wifi.
+- **First boot before agenix bootstrap**: pleiades's wifi won't work because the secret is encrypted only for blushda. Use wired/tether for the install, complete the agenix bootstrap (step 12), then switch to wifi.
 
 ### Recovering from a hostid mismatch
 

@@ -15,7 +15,7 @@
 # To impose useful structure on a flat list, this file uses two kinds of
 # variables:
 #
-#   - Identities (one per workstation/host): blushda, pleades, iris, …
+#   - Identities (one per workstation/host): blushda, pleiades, iris, …
 #     Each holds the pubkey for that machine.
 #
 #   - Access lists (named "<scope>Access"):
@@ -106,7 +106,7 @@ let
   # scripts/gen-host-key.sh which inserts/replaces these in place.
   blushda = "age1gumg838j0s9fpmly4umss05e994dh7zgq6j94fyx8tel9v6nqansn8aq9p";
 
-  pleades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoCf/2e719Y8SzpIc4clVYtde8HEeq+3oLIbtkWDkJ2";
+  pleiades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoCf/2e719Y8SzpIc4clVYtde8HEeq+3oLIbtkWDkJ2";
   iris    = "ssh-ed25519 AAAA_REPLACE_WITH_IRIS_HOST_PUBKEY";
 
   # ---- Access lists --------------------------------------------------------
@@ -120,7 +120,8 @@ let
 
   # allAccess: the shared base — recipients that should decrypt every
   # secret. Editor workstations and any host that should run `agenix -e`.
-  allAccess  = realKeys [ blushda pleades ];
+  example-host = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMWlfo53RiBjMA5oOH/617geQzieNm+IAb221SioIHcC";
+  allAccess  = realKeys [ blushda pleiades ];
 
   # Per-secret access lists. Each is the COMPLETE recipient set for that
   # secret (allAccess + whoever else needs it), so the publicKeys line

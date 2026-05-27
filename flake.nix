@@ -27,7 +27,7 @@
       mkHost = import ./lib/mkHost.nix inputs;
     in {
       nixosConfigurations = {
-        pleades   = mkHost { hostName = "pleades";   system = "x86_64-linux"; };
+        pleiades   = mkHost { hostName = "pleiades";   system = "x86_64-linux"; };
         iris      = mkHost { hostName = "iris";      system = "x86_64-linux"; };
         installer = mkHost { hostName = "installer"; system = "x86_64-linux"; };
       };
