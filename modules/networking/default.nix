@@ -86,6 +86,16 @@ in {
       "net.ipv6.conf.default.ignore_routes_with_linkdown" = 1;
     };
 
+    # Reverse-path filtering relaxation for multi-homed-same-subnet hosts.
+    # - sysctl rp_filter=2 covers the kernel's own routing-decision check.
+    # - networking.firewall.checkReversePath = "loose" replaces NixOS's
+    #   default nftables `fib … iif check exists` (strict — drops anything
+    #   whose reply path doesn't egress the receiving iface) with a less
+    #   restrictive variant that only requires *some* route to the source.
+    # Together they let asymmetric returns work without disabling anti-
+    # spoofing entirely.
+    networking.firewall.checkReversePath = "loose"; 
+
 
   };
 
