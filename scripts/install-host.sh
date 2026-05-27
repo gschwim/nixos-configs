@@ -100,21 +100,13 @@ read -rp "Continue? (y/N) " ans
 [ "$ans" = "y" ] || [ "$ans" = "Y" ] || exit 1
 
 # ----- ensure host key exists ---------------------------------------------
+# gen-host-key.sh is the single source of truth: it pulls from keepassxc
+# when an entry exists, generates + pushes when not, and hard-fails on
+# any mismatch with secrets/secrets.nix. It also prompts for KDBX_PW
+# (once per shell) and exports it for any future invocations in the
+# same session.
 
-mkdir -p "$HOST_KEY_DIR"
-chmod 700 "$HOST_KEY_DIR"
-
-if [ ! -f "$HOST_KEY" ]; then
-  echo "Generating ed25519 host key for $HOSTNAME → $HOST_KEY"
-  ssh-keygen -t ed25519 -N "" -f "$HOST_KEY" -C "ssh_host_ed25519_key@$HOSTNAME"
-else
-  echo "Using existing host key at $HOST_KEY"
-fi
-
-echo
-echo "Pubkey (paste into secrets/secrets.nix as '$HOSTNAME' if not already done):"
-cat "${HOST_KEY}.pub"
-echo
+"$REPO_ROOT/scripts/gen-host-key.sh" "$HOSTNAME"
 
 # ----- stage extra-files ---------------------------------------------------
 
