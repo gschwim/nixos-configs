@@ -33,13 +33,13 @@
 
   systemd.network.links."10-usb-ethernet" = {
     matchConfig.MACAddress = "00:50:b6:e5:48:99";    # paste from step 1
-    linkConfig.Name        = "ethstatic";             # whatever you want to call it
+    linkConfig.Name        = "dong0";             # whatever you want to call it
   };
 
 
   my.network.static = {
   enable       = true;
-  interface    = "ethstatic0";                   # confirm at install
+  interface    = "dong0";                   # confirm at install
   address      = "172.16.1.249";           # placeholder — choose real value
   prefixLength = 24;
   gateway      = "172.16.1.254";
