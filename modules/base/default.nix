@@ -67,7 +67,6 @@ in {
     # (the NixOS-module variant is wired up in modules/home-manager.nix
     # but defaults off — users own their own HM, not the system flake).
     home-manager
-    zsh
   ];
 
   programs.neovim = {
@@ -75,5 +74,9 @@ in {
     defaultEditor = true;
     viAlias       = true;
     vimAlias      = true;
+  };
+
+  programs.zsh = {
+    enable        = true;
   };
 }
