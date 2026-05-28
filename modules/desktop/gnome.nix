@@ -27,7 +27,10 @@ in {
 
     programs.firefox.enable = true;
 
-    environment.systemPackages = with pkgs; [ gnome-remote-desktop ];
+    environment.systemPackages = with pkgs; [
+      gnome-remote-desktop
+      gnomeExtensions.appindicator   # legacy tray icons (Dropbox, Slack, etc.)
+    ];
 
     # Fleet-wide GNOME defaults. Applied via dconf's system database, so
     # every user inherits these on first login but can still override per-
@@ -61,6 +64,16 @@ in {
 
         "org/gnome/desktop/notifications" = {
           show-in-lock-screen = mkBoolean false;
+        };
+
+        # Enable installed shell extensions. New users get this by default;
+        # existing users who've touched their extension list have their
+        # per-user value override this — toggle from the GNOME Extensions
+        # app if so.
+        "org/gnome/shell" = {
+          enabled-extensions = [
+            "appindicatorsupport@rgcjonas.gmail.com"
+          ];
         };
       };
     }];
