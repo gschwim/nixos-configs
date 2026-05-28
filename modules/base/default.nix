@@ -29,6 +29,7 @@ in {
     # One-time login password. Expired immediately by the activation script
     # below, so PAM forces a change on first login (GDM, console, or SSH).
     initialPassword = "changeme";
+    shell = pkgs.zsh;
   };
 
   # Force schwim to change the initial password on first login. `chage -d 0`
