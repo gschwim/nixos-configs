@@ -1,94 +1,120 @@
 # nixos-configs
 
-Flakes-based NixOS configurations for multiple hosts.
-Hosts currently defined: `pleiades` (Lenovo Thinkpad P1 Gen2), `iris` (headless server).
+Flakes-based NixOS configurations for a small home fleet. Three NixOS configurations are exposed today: `pleiades` (desktop laptop), `iris` (headless server), and `installer` (a custom NixOS minimal ISO used to bootstrap new hosts).
 
-The per-host file at [hosts/`<name>`/default.nix](hosts/) is the only file edited per host. Everything else is shared modules under [modules/](modules/).
+## Layout
 
-## Provisioning a host (the fast path)
+| Path | Contents |
+| --- | --- |
+| [hosts/](hosts/) | Per-host config. `hosts/<name>/default.nix` is the only file edited per host. `hosts/_templates/` holds the scaffold templates used by `scripts/new-host.sh`. |
+| [modules/](modules/) | Shared modules (base, boot/zfs, disko, desktop/gnome, networking, services, power, secrets, home-manager). Auto-imported via [modules/default.nix](modules/default.nix). |
+| [lib/](lib/) | [mkHost.nix](lib/mkHost.nix) (host-config helper) and [admin-keys.nix](lib/admin-keys.nix) (workstation SSH pubkeys authorised across the fleet). |
+| [home/](home/) | Home-manager config for the admin user. |
+| [secrets/](secrets/) | agenix-encrypted secrets + [secrets.nix](secrets/secrets.nix) recipient declarations. |
+| [scripts/](scripts/) | Provisioning tooling: `new-host.sh`, `gen-host-key.sh`, `install-host.sh`. |
 
-Three scripts, run in order. The same flow works for first installs and re-installs.
+## Prerequisites
 
-### Step 1 — Scaffold the host (skip if the host already exists)
+One-time setup on the authoring machine (the Mac you edit this repo from, referred to below as the workstation):
+
+- **Nix with flakes enabled.** `experimental-features = nix-command flakes` in `~/.config/nix/nix.conf`.
+- **An age authoring identity** at `~/.config/sops/age/keys.txt`. Generate with `age-keygen -o ~/.config/sops/age/keys.txt`, then paste its `Public key: age1...` value into [secrets/secrets.nix](secrets/secrets.nix) (replace the workstation identity at the top of the `let` block). Full setup recipe lives in the comment block at the top of that file.
+- **`keepassxc-cli` ≥ 2.7.7** on PATH. macOS: `brew install keepassxc`. 2.7.6 has an attachment-import bug that silently drops the second back-to-back import (see [scripts/gen-host-key.sh:15-17](scripts/gen-host-key.sh#L15-L17)) — verify with `keepassxc-cli --version`.
+- **A KeepassXC database** holding (or about to hold) the per-host SSH host keys. `scripts/gen-host-key.sh` reads/writes entries under `ssh-host-keys/<hostname>`. Point at it with `export KDBX_FILE=<path-to-kdbx>` in your shell (or accept the script's hardcoded default and adjust it locally). Set `KDBX_PW` to skip the per-invocation password prompt.
+- **A Linux build environment** for building the custom installer ISO. Mac alone cannot build x86_64-linux closures. Options: an existing NixOS host (e.g. `pleiades` once it's up), a configured remote builder in `/etc/nix/machines`, or `nix.linux-builder.enable = true` under nix-darwin.
+
+## Adding a new host
+
+End state of this section: a host directory exists, the host is registered in the flake, its ed25519 SSH host key is in KeepassXC and authorised in `secrets/secrets.nix`, and every agenix secret it needs decrypts to it. After this, jump to either "Installing with the USB installer" or "Manual install".
+
+### 1. Scaffold the host directory
 
 ```bash
-scripts/new-host.sh <host> <type>      # type = server | desktop
+scripts/new-host.sh <hostname> <server|desktop>
 ```
 
-Creates `hosts/<host>/{default.nix,hardware-configuration.nix}` from the matching template with a random `hostId`. Prints the line to add to `flake.nix`. Then edit `hosts/<host>/default.nix` and confirm: disk device, NIC name, static IP, toggles.
+Creates `hosts/<hostname>/{default.nix,hardware-configuration.nix}` from [hosts/_templates/server.nix](hosts/_templates/server.nix) or [hosts/_templates/desktop.nix](hosts/_templates/desktop.nix), substituting the hostname and a freshly-rolled 8-hex `hostId` (used by ZFS). The script intentionally does **not** touch `flake.nix` or `secrets/secrets.nix`; both edits happen in steps 3 and 4 below.
 
-### Step 2 — Pre-stage agenix recipient (skip if host needs no secrets)
+### 2. Fill in the per-host file
 
-```bash
-scripts/gen-host-key.sh <host>
+Open `hosts/<hostname>/default.nix` and confirm these fields (the templates contain sane defaults but most are placeholders):
+
+- `networking.hostName` — auto-filled, just verify.
+- `networking.hostId` — auto-filled (random). Immutable after first install: ZFS pool metadata bakes this in.
+- `my.disko.disk` — `/dev/sda` (server template) or `/dev/nvme0n1` (desktop template). Confirm at install with `lsblk` before running the installer.
+- `my.network.static.{interface,address,prefixLength,gateway,nameservers}` — pick a real IP, set the NIC name. For a desktop with wifi, see the commented-out `my.network.wireless` block.
+- Feature toggles — uncomment the ones you want (`my.desktop.gnome.enable`, `my.services.incus.enable`, `my.services.xrdp.enable`, etc.). Default-on baselines (openssh, networking, home-manager) need no entry.
+
+The templates are the authoritative reference for what's available.
+
+### 3. Register the host in `flake.nix`
+
+Add one line to `nixosConfigurations` in [flake.nix](flake.nix):
+
+```nix
+<hostname> = mkHost { hostName = "<hostname>"; system = "x86_64-linux"; };
 ```
 
-Generates `~/.local/share/nixos-configs/host-keys/<host>_ed25519` (outside the repo, never committed) and prints the pubkey. Then:
+`scripts/new-host.sh` prints the exact line at the end of its output. Done by hand to avoid the script clobbering nearby entries.
 
-1. Paste the pubkey as the value of `<host>` in `secrets/secrets.nix`.
-2. Add `<host>` to the `publicKeys` list of every secret it needs (e.g. `wifi-secrets.age`).
-3. Re-key:
-   ```bash
-   cd secrets
-   nix --extra-experimental-features 'nix-command flakes' \
-       run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -r
-   cd ..
-   ```
-4. Commit + push:
-   ```bash
-   git add -A && git commit -m "secrets: add <host>" && git push
-   ```
-
-### Step 3 — Install
-
-On the target, boot the NixOS installer (the custom ISO from this flake authorizes blushda's key for `schwim` with passwordless sudo out of the box):
+### 4. Generate (or pull) the host's SSH key
 
 ```bash
-sudo systemctl start sshd   # if not already running
-ip a                        # note the IPv4 address
+scripts/gen-host-key.sh <hostname>
 ```
 
-(If you booted the stock NixOS ISO instead, you'll need to add blushda's pubkey to `~/.ssh/authorized_keys` for the `nixos` user and run `INSTALL_USER=nixos scripts/install-host.sh ...` below — or set `~/.ssh/authorized_keys` for root and pass `INSTALL_USER=root`.)
+Three things happen, in order:
 
-On blushda:
+1. **KeepassXC lookup.** Looks for entry `ssh-host-keys/<hostname>` in the kdbx.
+   - **Present:** exports the two attachments (`ssh_host_ed25519_key`, `ssh_host_ed25519_key.pub`) to `~/.local/share/nixos-configs/host-keys/<hostname>_ed25519` (private) and `…_ed25519.pub` (public).
+   - **Absent:** runs `ssh-keygen -t ed25519`, writes to the cache, then creates the entry in KeepassXC with both attachments.
+2. **secrets.nix reconciliation.** Inserts or replaces a `<hostname> = "ssh-ed25519 …";` line in [secrets/secrets.nix](secrets/secrets.nix). If a real entry already exists and doesn't match the cache, the script hard-fails — *do not* install a host whose pubkey in `secrets.nix` doesn't match the key it'll boot with, or agenix secrets won't decrypt on first boot.
+3. **Prints the pubkey** for confirmation.
 
-```bash
-scripts/install-host.sh <host> <target-ip>
-```
+The KeepassXC round-trip is the authoritative store; the local file is a cache. Re-running for an existing host is idempotent (same pubkey every time).
 
-The script SSHes in as `$USER` (override with `INSTALL_USER=...`) and uses `sudo` for the parts that need root. The target user must have passwordless sudo.
+### 5. Add the host to the right access lists
 
-`install-host.sh` wraps [nixos-anywhere](https://github.com/nix-community/nixos-anywhere) and handles the rest end-to-end:
+[secrets/secrets.nix](secrets/secrets.nix) maintains named access lists (`allAccess`, `wifiAccess`, etc.) that compose per-secret recipient sets. Step 4 added the identity but not its memberships — by hand, append `<hostname>` to whatever lists apply:
 
-- Reads the host's `networking.hostId` from its per-host file.
-- Sets the installer's hostid before disko (no more first-boot ZFS dance).
-- Stages the pre-generated SSH host key into `/etc/ssh/` on the target (so agenix decryption works on first boot — no second rebuild needed).
-- Invokes nixos-anywhere: runs disko, pulls a real `hardware-configuration.nix` back into the flake, copies the closure, installs.
-- Uses `StrictHostKeyChecking=no` for installer connections (ephemeral fingerprints; expected to change each boot).
-- Prompts for confirmation before doing anything destructive.
+- `allAccess` — recipients that should decrypt **every** secret. Usually only editor workstations and any host you'd run `agenix -e` on. Don't put a regular host in here unless it really needs full access.
+- A per-secret list like `wifiAccess` — for hosts that only need one specific secret. The `realKeys` helper filters out `REPLACE_WITH_…` placeholders, so you can list a host's identifier ahead of provisioning without breaking the encrypt step.
 
-### Step 4 — Commit the generated hardware-configuration.nix
+### 6. Re-key and commit
 
 ```bash
-git add hosts/<host>/hardware-configuration.nix
-git commit -m "<host>: hardware-configuration.nix from install"
+cd secrets
+nix --extra-experimental-features 'nix-command flakes' \
+    run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -r
+cd ..
+git add -A
+git commit -m "secrets: add <hostname>"
 git push
 ```
 
-The target reboots fully configured. **Back up `~/.local/share/nixos-configs/host-keys/`** — those keys are the agenix decryption identities; if you lose them and re-install, every secret encrypted to that host must be re-keyed.
+Two agenix invocation gotchas to remember:
 
-## Custom installer ISO
+- agenix reads `secrets.nix` from the **current working directory** — always `cd secrets` first.
+- The authoring identity is an age key (not an SSH key), so `-i ~/.config/sops/age/keys.txt` is required on every `agenix -e` / `-r`. Without it: `age: error: no identity matched any of the recipients`.
 
-The flake exposes a `nixosConfigurations.installer` that builds a NixOS minimal ISO tuned for our workflow:
+The host is now ready to install. Pick a path:
 
-- Console output mirrors VGA + serial (`ttyS0,115200n8`) — works in VMs and headless hardware.
-- sshd up by default, key-only auth, blushda's ed25519 pubkey embedded.
-- `schwim` user has passwordless sudo (installer is ephemeral and key-protected).
+- **"Installing with the USB installer"** — fast path, recommended. The custom ISO + `scripts/install-host.sh` handle everything end-to-end from the workstation.
+- **"Manual install"** — fallback when you can't reach the target over SSH from the workstation.
+
+## Creating the USB installer
+
+The flake exposes a `nixosConfigurations.installer` that builds a NixOS minimal ISO tuned for this fleet. What it does differently from the stock minimal installer (see [hosts/installer/default.nix](hosts/installer/default.nix)):
+
+- Console output mirrored to both `tty1` (VGA) and `ttyS0,115200n8` (serial) — works in VMs and headless boxes.
+- sshd up by default, key-only auth, the workstation's ed25519 pubkey embedded for both the admin user and root (the latter is required because `nixos-anywhere` pivots to `root@` mid-install).
+- Admin user has passwordless sudo (the installer is ephemeral and SSH-key-protected).
 - Bundles `git`, `vim`, `htop`, `nix-output-monitor`, `cryptsetup`.
 - NetworkManager left enabled (the upstream installer default — easiest path to wifi).
-- Live ISO root is writable as tmpfs (use `/home/schwim/` or `/tmp/` for staging). No persistent partition.
+- Fleet baselines that conflict with a live ISO (`home-manager`, `networking`) are disabled.
+- Live ISO root is writable as tmpfs; no persistent partition.
 
-### Building
+### Build
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' \
@@ -96,347 +122,267 @@ nix --extra-experimental-features 'nix-command flakes' \
 # Output: result/iso/nixos-*-x86_64-linux.iso
 ```
 
-**This requires a Linux build environment** (the ISO uses Linux derivations). Options:
-- Build on any running NixOS host (e.g. pleiades, once installed). Simplest.
-- Configure a Linux remote builder on blushda (`/etc/nix/machines`) — most flexible.
-- Use `nix.linux-builder.enable = true` if you ever adopt nix-darwin.
+This step **must run on a Linux host** — Mac alone can't build x86_64-linux closures. Use any running NixOS host in the fleet (typically `pleiades` once it's up), a configured remote builder, or `nix.linux-builder.enable = true` under nix-darwin.
 
-For the initial pleiades re-install, use the stock NixOS 25.11 minimal ISO from <https://nixos.org/download/>. After pleiades is up, build the custom ISO from pleiades for all subsequent installs.
+Bootstrap reality: the *first* host you install (the first time you set this up) needs the stock NixOS 25.11 minimal ISO from <https://nixos.org/download/>, since there's no Linux host yet to build the custom one. Every install after that can use the custom ISO.
 
-### Flashing (same as stock ISO)
+### Flash to USB (on macOS)
 
 ```bash
 diskutil list                                       # find the USB
-diskutil unmountDisk /dev/diskN
+diskutil unmountDisk /dev/diskN                     # unmount but don't eject
 sudo dd bs=4M conv=fsync oflag=direct status=progress \
-    if=<path-to-image> of=/dev/sdX
+    if=result/iso/nixos-*-x86_64-linux.iso of=/dev/rdiskN
 diskutil eject /dev/diskN
 ```
+
+Use `/dev/rdiskN` (raw device) — it's substantially faster than `/dev/diskN`.
 
 ### VM use
 
-Attach `result/iso/nixos-*-x86_64-linux.iso` as a CD/DVD device to the VM, boot from it. Connect via serial (qemu: `-serial mon:stdio`) or wait for it to come up and SSH in (`ssh schwim@<vm-ip>`).
+Attach `result/iso/nixos-*-x86_64-linux.iso` as a CD/DVD device and boot from it. With qemu, add `-serial mon:stdio` to capture the serial console at the host terminal; or just wait for the VM to come up and SSH in (`ssh <user>@<vm-ip>`).
 
 ### Iteration loop
 
-After tweaking `hosts/installer/default.nix`:
-
 ```bash
+# edit hosts/installer/default.nix
 git add hosts/installer/default.nix
 git commit -m "installer: ..."
 git push
-# on pleiades (or wherever you build):
+# on a Linux host (e.g. pleiades):
 git pull
 nix build .#nixosConfigurations.installer.config.system.build.isoImage
-# re-flash the result
+# re-flash result/iso/nixos-*.iso
 ```
 
-## Manual install (fallback)
+## Installing with the USB installer
 
-The rest of this document describes the original step-by-step manual install workflow. Use it if you can't reach the target over SSH from blushda — e.g. installing from a USB on an offline machine.
+End state of this section: the target is installed, rebooted, and fully configured. No second rebuild needed; agenix secrets decrypt on first boot because the SSH host key was pre-staged.
 
-## Installing a host from scratch (baremetal, manual)
+### 1. Boot the target
 
-The steps below assume installing `pleiades` on a fresh Thinkpad P1 Gen2 from blushda (the authoring Mac). For `iris`, substitute `iris` everywhere and adjust the disk path / interface names.
-
-### 0. Prerequisites on blushda (the Mac)
+Plug in the USB and boot from it. NetworkManager is on by default in the custom installer; once at the prompt:
 
 ```bash
-cd /Users/schwim/src/nixos-configs
-
-# Sanity-check the flake evaluates
-nix --extra-experimental-features 'nix-command flakes' flake check --no-build
-
-# If you haven't yet set up the agenix wifi secret, follow the recipe in
-# secrets/secrets.nix top-of-file. Do this BEFORE installing pleiades only
-# if you plan to rely on wifi at install time (you can also use ethernet).
+ip a               # find the target's IPv4 address
 ```
 
-### 1. Make the repo reachable from the installer
+sshd is already running and the workstation's key is authorised for both the admin user and root. No setup needed in the live environment.
 
-Pick ONE:
-
-**A. Push to a git remote** (recommended — simplest from the installer):
+### 2. Run the installer from the workstation
 
 ```bash
-cd /Users/schwim/src/nixos-configs
-git remote add origin git@github.com:gschwim/nixos-configs.git   # one-time only
-git add -A
-git commit -m "initial scaffold"
-git push -u origin master
+cd /path/to/nixos-configs
+scripts/install-host.sh <hostname> <target-ip>
 ```
 
-**B. Copy to a USB stick** (offline path):
+Override the SSH user via env if the target's admin user differs: `INSTALL_USER=nixos scripts/install-host.sh ...`. The target user must have passwordless sudo (the custom ISO grants this for the admin user out of the box).
+
+What the script does end-to-end (see [scripts/install-host.sh](scripts/install-host.sh)):
+
+1. Reads `networking.hostId` from `hosts/<hostname>/default.nix`.
+2. Calls `scripts/gen-host-key.sh <hostname>` to ensure the SSH host key exists in KeepassXC and the cache, and the entry in `secrets/secrets.nix` matches. If it's the first time for this host, you'll be prompted for the kdbx password.
+3. Stages the key under an extra-files tree at `/etc/ssh/ssh_host_ed25519_key{,.pub}` for `nixos-anywhere` to drop onto the target before first boot. **This is what makes agenix decryption work on first boot — no second rebuild.**
+4. SSHes to the installer, sets the transient hostid via `zgenhostid -fo /run/hostid <hostId>` + `mount --bind /run/hostid /etc/hostid` (so the ZFS pool is born with the *target's* hostid, not the installer's), and copies the user's authorized_keys to `/root/.ssh/` (nixos-anywhere pivots to `root@` mid-install).
+5. Invokes `nixos-anywhere --flake .#<hostname> --extra-files <staging> --generate-hardware-config nixos-generate-config <path> --build-on remote`. Disko wipes + partitions, nixos-anywhere generates a real `hardware-configuration.nix` back into the host directory, copies the closure, installs.
+
+Notes on the flags: `--build-on remote` is set explicitly because the workstation (Darwin) can't build x86_64-linux; without it `nixos-anywhere` runs a noisy probe before falling back. `StrictHostKeyChecking=no` is set on every installer-bound SSH connection because installer ISOs regenerate their host keys every boot — a stable known_hosts entry would only cause "host key changed" errors on re-installs.
+
+The script prompts twice before doing anything destructive: once if `secrets/secrets.nix` still has a `REPLACE_WITH_…` placeholder for this host, once again before the disk wipe.
+
+### 3. Commit the regenerated `hardware-configuration.nix`
 
 ```bash
-# Format a USB as exFAT or ext4 first (skip if already done).
-# Then copy the repo to it:
-cp -R /Users/schwim/src/nixos-configs /Volumes/<your-usb-label>/
+git add hosts/<hostname>/hardware-configuration.nix
+git commit -m "<hostname>: hardware-configuration.nix from install"
+git push
 ```
 
-### 2. Create the NixOS installer USB
+### 4. Back up the host key
 
-Download the **NixOS 25.11 minimal ISO** for x86_64 from <https://nixos.org/download/#nixos-iso>.
+`~/.local/share/nixos-configs/host-keys/<hostname>_ed25519` is the agenix decryption identity for this host. The KeepassXC round-trip already protects it (the kdbx is the source of truth), but if you lose both the kdbx entry *and* the local cache, every agenix secret encrypted to this host has to be re-keyed. Keep your kdbx backed up.
 
-On blushda, flash to USB (find the device first with `diskutil list`):
+## Manual install
 
-```bash
-# Identify the USB (look for an external, removable device)
-diskutil list
+Fallback path. Use when you can't reach the target from the workstation over SSH (no working network adapter, target on an isolated network, prefer to install entirely on-console). The end result is the same; you just do by hand what `install-host.sh` would have done remotely.
 
-# Unmount but don't eject (replace diskN with the actual device)
-diskutil unmountDisk /dev/diskN
+### 1. Boot stock NixOS
 
-# Flash. Replace path-to-iso with the downloaded file path.
-# /dev/rdiskN (raw device) is faster than /dev/diskN.
-sudo dd if=/path/to/nixos-minimal-25.11-x86_64-linux.iso \
-        of=/dev/rdiskN bs=4m status=progress
+Download the NixOS 25.11 minimal ISO from <https://nixos.org/download/>, flash it to USB with the same `dd` recipe as in "Creating the USB installer", boot the target from it.
 
-# Eject when done
-diskutil eject /dev/diskN
-```
+### 2. Get the installer online
 
-### 3. Boot the installer on pleiades
+Wired: plug in, DHCP usually completes automatically. Verify with `ip a` + `ping -c 2 1.1.1.1`.
 
-1. Insert the installer USB into pleiades.
-2. Power on. Press **F12** as the Lenovo logo appears to get the boot menu.
-3. Select the USB device. (If it doesn't appear: enter **F1** BIOS setup → Security → Secure Boot → Disabled; also Startup → UEFI/Legacy → UEFI Only.)
-4. Wait for the NixOS installer to drop you at a root shell.
-
-### 4. Get the installer online
-
-The P1 Gen2 has no built-in RJ45 — you need either a USB-C/Thunderbolt ethernet adapter, USB tether from a phone, or wifi.
-
-**Option A — Wired (preferred for first install):**
-
-Plug in the adapter; DHCP usually completes automatically. Verify:
-
-```bash
-ip a
-ping -c 2 1.1.1.1
-```
-
-**Option B — WiFi via iwd (NixOS installer ships with `iwctl`):**
+Wifi (`iwd` ships in the installer):
 
 ```bash
 sudo systemctl start iwd
 iwctl
 # inside iwctl:
 [iwd]# device list
-[iwd]# station wlan0 scan
-[iwd]# station wlan0 get-networks
-[iwd]# station wlan0 connect "Canis Major"
+[iwd]# station <wifi-iface> scan
+[iwd]# station <wifi-iface> get-networks
+[iwd]# station <wifi-iface> connect "<your-wifi-ssid>"
 # (enter passphrase when prompted)
 [iwd]# exit
-
-ping -c 2 1.1.1.1
 ```
 
-(Interface name may differ — check `ip a` first; on most modern installers it's `wlan0`.)
+### 3. Pull the flake onto the installer
 
-### 5. Pull the flake onto the installer
-
-**If you pushed to git** (option 1A above):
+Easiest: clone from your git remote.
 
 ```bash
 nix-shell -p git
 cd /tmp
-git clone https://github.com/gschwim/nixos-configs.git
+git clone <your-flake-repo-url>
 cd nixos-configs
 ```
 
-**If you brought it on USB** (option 1B): mount the USB and copy:
+USB alternative: copy the repo to a USB stick on the workstation first, then on the target `mount /dev/sdX1 /mnt-usb && cp -R /mnt-usb/nixos-configs /tmp/`.
 
-```bash
-mkdir -p /mnt-usb
-mount /dev/sdX1 /mnt-usb        # find the device with `lsblk`
-cp -R /mnt-usb/nixos-configs /tmp/
-cd /tmp/nixos-configs
-```
-
-### 6. Verify the target disk path
-
-The disko config in [hosts/pleiades/default.nix](hosts/pleiades/default.nix) uses `/dev/nvme0n1`. Confirm this matches what's actually present:
+### 4. Verify the disko target
 
 ```bash
 lsblk
 ```
 
-Expect to see `nvme0n1` of the correct size. If not, edit `hosts/pleiades/default.nix` to set the right device path before continuing.
+Confirm the device path in `hosts/<hostname>/default.nix` matches. Edit if it doesn't.
 
-⚠️  **The next step erases everything on the target disk.** No prompt, no confirmation. Be sure.
+⚠️ The next step erases the target disk. No prompt. Triple-check `lsblk` before continuing.
 
-### 7. Partition + format with disko
-
-**Important:** set the installer's hostid to match this host's `networking.hostId` BEFORE running disko. Otherwise the ZFS pool is born with the installer's hostid and won't import on first boot. (Look up the host's `hostId` in `hosts/<host>/default.nix`.)
+### 5. Set the installer's hostid
 
 ```bash
-# Substitute the host's actual hostId value (e.g. deadbeef for pleiades).
-# The live ISO's /etc is read-only, so write to /run and bind-mount.
-sudo zgenhostid -fo /run/hostid deadbeef
+HOSTID=$(grep hostId hosts/<hostname>/default.nix | sed -E 's/.*"([^"]+)".*/\1/')
+sudo zgenhostid -fo /run/hostid "$HOSTID"
 sudo mount --bind /run/hostid /etc/hostid
-hostid                        # verify it prints deadbeef
+hostid           # verify it prints the expected value
+```
 
-# Now create the pool. It will be born with the right hostid.
+The live ISO's `/etc` is read-only, so the bind-mount from `/run` is required. If you skip this, the ZFS pool is born with the installer's hostid and won't import on first boot (see the recovery recipe at the bottom of this README).
+
+### 6. Run disko
+
+```bash
 sudo nix --extra-experimental-features 'nix-command flakes' \
     run github:nix-community/disko -- \
     --mode disko \
-    --flake /tmp/nixos-configs#pleiades
+    --flake /tmp/nixos-configs#<hostname>
 ```
 
-If you forgot the `zgenhostid` step and got "pool was previously in use by another system" on first boot, see [Recovering from a hostid mismatch](#recovering-from-a-hostid-mismatch) below.
+Verify after: `mount | grep /mnt`, `zfs list`, `ls /mnt/boot`.
 
-Disko partitions `/dev/nvme0n1`, creates the rpool, makes the datasets, and mounts everything under `/mnt`. Verify:
-
-```bash
-mount | grep /mnt
-zfs list
-ls /mnt/boot
-```
-
-### 8. Generate hardware-configuration.nix for this hardware
-
-The stub at `hosts/pleiades/hardware-configuration.nix` is a placeholder. Replace it with the real one generated against this exact machine:
+### 7. Generate `hardware-configuration.nix`
 
 ```bash
 sudo nixos-generate-config --no-filesystems --root /mnt
-
-# That writes to /mnt/etc/nixos/hardware-configuration.nix.
-# Copy it into the flake, replacing the stub:
 sudo cp /mnt/etc/nixos/hardware-configuration.nix \
-        /tmp/nixos-configs/hosts/pleiades/hardware-configuration.nix
-
-# Commit + push so blushda gets the change too.
+        /tmp/nixos-configs/hosts/<hostname>/hardware-configuration.nix
 cd /tmp/nixos-configs
-git add hosts/pleiades/hardware-configuration.nix
-git -c user.email='schwim@7e7.co' -c user.name='schwim' \
-    commit -m "pleiades: hardware-configuration.nix from first install"
-git push    # if you used the git remote path
+git add hosts/<hostname>/hardware-configuration.nix
+git -c user.email='you@example.com' -c user.name='<you>' \
+    commit -m "<hostname>: hardware-configuration.nix from install"
+git push                                  # or copy the file back to the workstation by hand
 ```
 
-(If you used USB instead of git, copy the file back to blushda after install.)
-
-### 9. Install
+### 8. Install
 
 ```bash
-sudo nixos-install --flake /tmp/nixos-configs#pleiades
+sudo nixos-install --flake /tmp/nixos-configs#<hostname>
 ```
 
-This builds the system in the flake's nixpkgs (25.11), copies the closure to `/mnt/nix`, and installs the bootloader. It prompts for the **root password** at the very end — set one.
+Prompts for the root password at the end. Set one.
 
-### 10. Set schwim's password before first boot
+### 9. Set the admin user's password
 
-The `schwim` user is created by the base module but has no password. Set one inside the chroot:
+The admin user is created by the base module without a password:
 
 ```bash
-sudo nixos-enter --root /mnt -- passwd schwim
+sudo nixos-enter --root /mnt -- passwd <user>
 ```
 
-### 11. Reboot into the installed system
+### 10. Pre-stage the SSH host key (if you want to skip the second rebuild)
+
+If you ran `scripts/gen-host-key.sh <hostname>` on the workstation *before* this install and committed the resulting `secrets.nix` change, copy the cached private/public keys onto the target before reboot:
+
+```bash
+# On the workstation:
+scp ~/.local/share/nixos-configs/host-keys/<hostname>_ed25519 \
+    ~/.local/share/nixos-configs/host-keys/<hostname>_ed25519.pub \
+    root@<target-ip>:/tmp/
+
+# On the target:
+sudo install -m 600 /tmp/<hostname>_ed25519     /mnt/etc/ssh/ssh_host_ed25519_key
+sudo install -m 644 /tmp/<hostname>_ed25519.pub /mnt/etc/ssh/ssh_host_ed25519_key.pub
+```
+
+If you skip this, work the bootstrap from step 12.
+
+### 11. Reboot
 
 ```bash
 sudo reboot
 # Remove the USB during POST.
 ```
 
-Log in as `schwim` at the GDM greeter (pleiades) or console (iris).
+Log in as the admin user (GDM if it's a desktop, console otherwise).
 
-### 12. Bootstrap agenix for this host
+### 12. Agenix bootstrap (only if you skipped step 10)
 
-The wifi secret is currently encrypted only for blushda. Pleiades needs its own SSH host key added so it can decrypt. From pleiades:
+The target generated a fresh SSH host key at first boot that the rest of the fleet doesn't know about. From the target:
 
 ```bash
 cat /etc/ssh/ssh_host_ed25519_key.pub
-# Copy the full "ssh-ed25519 AAAA... root@pleiades" line
 ```
 
-Back on blushda:
+Copy the full `ssh-ed25519 …` line. Back on the workstation:
 
-1. Open [secrets/secrets.nix](secrets/secrets.nix), paste the pubkey as the value of `pleiades`.
-2. Change the last line from `editors` to `editors ++ [ pleiades ]`.
-3. Re-encrypt:
+1. Run `scripts/gen-host-key.sh <hostname>` — it'll detect the mismatch between the cached/kdbx key and the now-installed key, and refuse. Resolve by either pulling the just-printed key into KeepassXC manually (then re-running `gen-host-key.sh`), or by pasting the new pubkey directly into `secrets/secrets.nix` and updating KeepassXC.
+2. Re-encrypt: `cd secrets && agenix -i ~/.config/sops/age/keys.txt -r`.
+3. Commit, push.
+4. On the target: `git pull && sudo nixos-rebuild switch --flake .#<hostname>`.
 
-```bash
-cd /Users/schwim/src/nixos-configs/secrets
-nix --extra-experimental-features 'nix-command flakes' \
-    run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -r
-```
-
-4. Commit + push:
-
-```bash
-cd /Users/schwim/src/nixos-configs
-git add secrets/
-git commit -m "secrets: add pleiades host key, re-key wifi-secrets"
-git push
-```
-
-5. On pleiades, pull + rebuild to activate the now-decryptable secret:
-
-```bash
-cd /tmp/nixos-configs   # or wherever you cloned it
-git pull
-sudo nixos-rebuild switch --flake .#pleiades
-```
-
-After the rebuild, `/run/agenix/wifi-secrets` exists (root-readable only) and wpa_supplicant can authenticate to Canis Major.
-
-### 13. Verify
-
-```bash
-# Services up?
-systemctl status sshd incus
-
-# ZFS layout matches the disko spec?
-zfs list
-
-# WiFi associated? (only if you switched to wifi after install)
-ip a show wlp82s0
-iwconfig wlp82s0 2>/dev/null || iw dev wlp82s0 link
-
-# Agenix decryption worked?
-sudo ls -la /run/agenix/
-
-# Incus listening?
-ss -tlnp | grep 8443
-```
-
-If you're joining `pleiades` to an existing incus cluster, run `incus cluster join` interactively per the incus docs (cluster membership is incus-level state, not NixOS-level).
+After this `/run/agenix/*` exists and any secret the host needs decrypts.
 
 ## Day-to-day rebuilds
 
-After the initial install, all changes flow through git:
-
 ```bash
-# On blushda: edit something, commit, push.
-cd /Users/schwim/src/nixos-configs
-# ... edit hosts/pleiades/default.nix or a module ...
-git add -A && git commit -m "pleiades: enable foo"
+# On the workstation: edit, commit, push.
+cd /path/to/nixos-configs
+# ... edit hosts/<hostname>/default.nix or a module ...
+git add -A && git commit -m "<hostname>: enable foo"
 git push
 
-# On pleiades: pull and rebuild.
-cd /path/to/checkout
+# On the target: pull and rebuild.
+cd /path/to/nixos-configs        # wherever you cloned it
 git pull
-sudo nixos-rebuild switch --flake .#pleiades
+sudo nixos-rebuild switch --flake .#<hostname>
 ```
 
 ## Editing secrets
 
-See the comment block at the top of [secrets/secrets.nix](secrets/secrets.nix) for the full recipe (first-time setup, adding a host, editing later, gotchas).
+Full recipe (first-time setup, gotchas) lives at the top of [secrets/secrets.nix](secrets/secrets.nix). Common case:
+
+```bash
+cd /path/to/nixos-configs/secrets
+nix --extra-experimental-features 'nix-command flakes' \
+    run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -e <name>.age
+```
 
 ## Gotchas
 
 - **`nix flake check` requires files be `git add`-ed.** Untracked files are invisible to the flake. Always `git add -A` after creating new files, even before committing.
-- **Disko erases the target disk with no prompt.** Triple-check `lsblk` output before step 7.
-- **ZFS hostId** must match between pool-create time and runtime. The per-host file's `networking.hostId` is the source of truth. Run `sudo zgenhostid -f <hostId>` in the installer BEFORE disko (step 7). Don't change `networking.hostId` after install or rpool won't import. See recovery recipe below if you hit "pool was previously in use by another system" at first boot.
-- **`agenix -e` on an empty file fails** with EOF; `rm` the empty file first.
-- **`agenix` reads `secrets.nix` from cwd**, not from a repo-relative path; always `cd secrets` first.
-- **`agenix` only auto-discovers SSH keys.** The editor identity (blushda) is an age key at `~/.config/sops/age/keys.txt`, so every `agenix -e` / `-r` invocation needs `-i ~/.config/sops/age/keys.txt`. Without it: `age: error: no identity matched any of the recipients`.
-- **First boot before agenix bootstrap**: pleiades's wifi won't work because the secret is encrypted only for blushda. Use wired/tether for the install, complete the agenix bootstrap (step 12), then switch to wifi.
+- **Disko erases the target disk with no prompt.** `install-host.sh` wraps it with one; the manual path does not. Confirm `lsblk` carefully.
+- **ZFS hostId** must match between pool-create time and runtime. The per-host file's `networking.hostId` is the source of truth. `install-host.sh` handles this automatically; the manual path requires the `zgenhostid` + bind-mount dance before disko. Don't change `networking.hostId` after install or the rpool won't import. Recovery recipe below.
+- **agenix invocation needs both `-i ~/.config/sops/age/keys.txt` and a `cd secrets` first** — the agenix CLI only auto-discovers SSH identities, not the age key the workstation uses, and it reads `secrets.nix` from the cwd.
+- **`agenix -e` on a 0-byte file fails** with "failed to read intro: EOF". Delete the empty placeholder first; agenix recreates it.
+- **Pre-staging the SSH host key** (what `install-host.sh` does via `--extra-files`) is what allows agenix-encrypted secrets to decrypt on first boot. Skip it and you need a second rebuild after the manual agenix bootstrap.
+- **`gen-host-key.sh` hard-fails on mismatch** between the cached/kdbx pubkey and what's in `secrets/secrets.nix`. This is by design — installing a host whose recipient list doesn't match the SSH key it boots with means agenix secrets won't decrypt. Resolve by updating whichever side is stale.
 
-### Recovering from a hostid mismatch
+## Recovery: hostid mismatch
 
-If first boot fails with `cannot import 'rpool': pool was previously in use by another system`, boot the installer USB and do this once. Substitute the host's actual `hostId` value from `hosts/<host>/default.nix`.
+If first boot fails with `cannot import 'rpool': pool was previously in use by another system`, boot the installer USB and do this once. Substitute the host's actual `hostId` value from `hosts/<hostname>/default.nix`.
 
 ```bash
 # 1. Force-import past the safety check.
@@ -444,9 +390,9 @@ sudo zpool import -f rpool
 
 # 2. Set the installer's hostid to match the installed system.
 #    The live ISO's /etc is read-only, so write to /run and bind-mount.
-sudo zgenhostid -fo /run/hostid deadbeef
+sudo zgenhostid -fo /run/hostid <hostId>
 sudo mount --bind /run/hostid /etc/hostid
-hostid                        # verify it prints deadbeef
+hostid                        # verify it prints <hostId>
 
 # 3. Re-export, then plain re-import — this bakes the new hostid
 #    into the pool's metadata.
