@@ -129,10 +129,30 @@ in {
           { name = "net-prod";     description = "Attach to prod routed bridge (172.16.4.0/24)"; devices.eth0 = { type = "nic"; network = "prod";     name = "eth0"; }; }
           { name = "net-incusbr0"; description = "Attach to default NAT bridge";                  devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
-          # Per-container IP: `incus config device set <ct> eth0 ipv4.address=172.16.0.X`.
-          # The container DHCPs at boot; the vlan2 network's dnsmasq serves
-          # the reserved IP plus gateway 172.16.0.254 and DNS 172.16.1.253.
-          { name = "net-vlan2"; description = "Attach to VLAN 2 bridge (172.16.0.0/24, gw .254, DHCP reservations only)"; devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; }; }
+          {
+            # Per-instance IP: `incus config device set <ct> eth0 ipv4.address=172.16.0.X`.
+            # The instance DHCPs at boot; the vlan2 network's dnsmasq serves
+            # the reserved IP plus gateway 172.16.0.254 and DNS 172.16.1.253.
+            #
+            # cloud-init.network-config is set because incus's auto-generated
+            # config references the incus device name ("eth0"), which only
+            # matches inside CONTAINERS — VM kernels name virtio NICs e.g.
+            # enp5s0, so the auto-config doesn't match anything and DHCP never
+            # runs. Globbing on "e*" covers both naming schemes.
+            name        = "net-vlan2";
+            description = "Attach to VLAN 2 bridge (172.16.0.0/24, gw .254, DHCP reservations only)";
+            config = {
+              "cloud-init.network-config" = ''
+                version: 2
+                ethernets:
+                  primary:
+                    match:
+                      name: "e*"
+                    dhcp4: true
+              '';
+            };
+            devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; };
+          }
 
           { name = "disk-default"; description = "Root disk on default ZFS pool"; devices.root = { type = "disk"; pool = "default"; path = "/"; }; }
 
