@@ -52,16 +52,33 @@ in {
             };
           }
           {
-            # L2 pass-through for VLAN 2. The bridge enslaves dong0.2 (the
-            # tagged trunk subif declared on the host) and carries no IP /
-            # NAT / DHCP — containers reach the upstream VLAN 2 gateway
-            # (172.16.0.254) directly via the trunk.
+            # Incus-managed bridge for VLAN 2. The bridge enslaves dong0.2
+            # (the tagged trunk subif declared on the host) AND holds an IP
+            # on VLAN 2 so incus can run a dnsmasq on it for per-container
+            # DHCP reservations.
+            #
+            # Per-container IP assignment:
+            #   incus config device set <ct> eth0 ipv4.address=172.16.0.X
+            # That writes a dhcp-host= entry into this network's dnsmasq;
+            # the container DHCPs at boot and receives the reserved IP plus
+            # the gateway (DHCP option 3) and DNS (option 6) announced below.
+            #
+            # WARNING: do not drop raw.dnsmasq=dhcp-ignore=tag:!known.
+            # Because dong0.2 is a port on this bridge, dnsmasq sees DHCP
+            # broadcasts from the entire VLAN 2 segment. Without that
+            # directive it would reply to any unknown client and become a
+            # rogue DHCP server on the VLAN.
             name = "vlan2";
             type = "bridge";
             config = {
               "bridge.external_interfaces" = "dong0.2";
-              "ipv4.address"               = "none";
+              "ipv4.address"               = "172.16.0.249/24";
+              "ipv4.nat"                   = "false";
+              "ipv4.dhcp"                  = "true";
+              "ipv4.dhcp.gateway"          = "172.16.0.254";
+              "dns.nameservers"            = "172.16.1.253";
               "ipv6.address"               = "none";
+              "raw.dnsmasq"                = "dhcp-ignore=tag:!known";
             };
           }
         ];
@@ -112,27 +129,10 @@ in {
           { name = "net-prod";     description = "Attach to prod routed bridge (172.16.4.0/24)"; devices.eth0 = { type = "nic"; network = "prod";     name = "eth0"; }; }
           { name = "net-incusbr0"; description = "Attach to default NAT bridge";                  devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
-          {
-            name        = "net-vlan2";
-            description = "Attach to VLAN 2 L2 pass-through bridge (gw 172.16.0.254)";
-            config = {
-              # Incus injects this as the container's cloud-init network-config.
-              # Per-container static IP is set via:
-              #   incus config device set <ct> eth0 ipv4.address=172.16.2.X
-              # The device override merges with this profile so each container
-              # gets its IP from the override and gateway/DNS from the profile.
-              "cloud-init.network-config" = ''
-                version: 2
-                ethernets:
-                  eth0:
-                    dhcp4: false
-                    gateway4: 172.16.0.254
-                    nameservers:
-                      addresses: [172.16.1.253]
-              '';
-            };
-            devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; };
-          }
+          # Per-container IP: `incus config device set <ct> eth0 ipv4.address=172.16.0.X`.
+          # The container DHCPs at boot; the vlan2 network's dnsmasq serves
+          # the reserved IP plus gateway 172.16.0.254 and DNS 172.16.1.253.
+          { name = "net-vlan2"; description = "Attach to VLAN 2 bridge (172.16.0.0/24, gw .254, DHCP reservations only)"; devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; }; }
 
           { name = "disk-default"; description = "Root disk on default ZFS pool"; devices.root = { type = "disk"; pool = "default"; path = "/"; }; }
 
@@ -150,6 +150,10 @@ in {
     };
 
     networking.firewall.allowedTCPPorts = [ 8443 ];
-    networking.firewall.trustedInterfaces = [ "incusbr0" "prod" "vlan2" ];
+    # vlan2 deliberately NOT trusted: the bridge has an IP on VLAN 2, so
+    # trusting it would expose pleiades's services to every device on that
+    # VLAN — not just containers we own. Containers reach out via the bridge
+    # freely; inbound to pleiades from VLAN 2 still goes through the firewall.
+    networking.firewall.trustedInterfaces = [ "incusbr0" "prod" ];
   };
 }
