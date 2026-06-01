@@ -46,6 +46,18 @@
   nameservers  = [ "172.16.1.253" ];
   };
 
+  # Tagged VLAN 2 trunk on dong0. The subif itself carries no IP — it's
+  # enslaved by the incus 'vlan2' bridge (modules/services/incus.nix) as a
+  # straight L2 pass-through to container veths.
+  networking.vlans."dong0.2" = {
+    id        = 2;
+    interface = "dong0";
+  };
+
+  # The NM auto-exclusion in modules/networking/default.nix only fires for
+  # ifaces with a declared ipv4.addresses; dong0.2 has none, so name it.
+  my.networking.networkmanager.unmanaged = [ "interface-name:dong0.2" ];
+
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;

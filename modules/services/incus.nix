@@ -51,6 +51,19 @@ in {
               "ipv4.dhcp.ranges"  = "172.16.4.100-172.16.4.200";
             };
           }
+          {
+            # L2 pass-through for VLAN 2. The bridge enslaves dong0.2 (the
+            # tagged trunk subif declared on the host) and carries no IP /
+            # NAT / DHCP — containers reach the upstream VLAN 2 gateway
+            # (172.16.2.254) directly via the trunk.
+            name = "vlan2";
+            type = "bridge";
+            config = {
+              "bridge.external_interfaces" = "dong0.2";
+              "ipv4.address"               = "none";
+              "ipv6.address"               = "none";
+            };
+          }
         ];
 
         profiles = [
@@ -99,6 +112,28 @@ in {
           { name = "net-prod";     description = "Attach to prod routed bridge (172.16.4.0/24)"; devices.eth0 = { type = "nic"; network = "prod";     name = "eth0"; }; }
           { name = "net-incusbr0"; description = "Attach to default NAT bridge";                  devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
+          {
+            name        = "net-vlan2";
+            description = "Attach to VLAN 2 L2 pass-through bridge (gw 172.16.2.254)";
+            config = {
+              # Incus injects this as the container's cloud-init network-config.
+              # Per-container static IP is set via:
+              #   incus config device set <ct> eth0 ipv4.address=172.16.2.X
+              # The device override merges with this profile so each container
+              # gets its IP from the override and gateway/DNS from the profile.
+              "cloud-init.network-config" = ''
+                version: 2
+                ethernets:
+                  eth0:
+                    dhcp4: false
+                    gateway4: 172.16.2.254
+                    nameservers:
+                      addresses: [172.16.1.253]
+              '';
+            };
+            devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; };
+          }
+
           { name = "disk-default"; description = "Root disk on default ZFS pool"; devices.root = { type = "disk"; pool = "default"; path = "/"; }; }
 
           { name = "cpu-1"; config."limits.cpu" = "1"; }
@@ -115,6 +150,6 @@ in {
     };
 
     networking.firewall.allowedTCPPorts = [ 8443 ];
-    networking.firewall.trustedInterfaces = [ "incusbr0" "prod" ];
+    networking.firewall.trustedInterfaces = [ "incusbr0" "prod" "vlan2" ];
   };
 }
