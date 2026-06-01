@@ -55,7 +55,7 @@ in {
             # L2 pass-through for VLAN 2. The bridge enslaves dong0.2 (the
             # tagged trunk subif declared on the host) and carries no IP /
             # NAT / DHCP — containers reach the upstream VLAN 2 gateway
-            # (172.16.2.254) directly via the trunk.
+            # (172.16.0.254) directly via the trunk.
             name = "vlan2";
             type = "bridge";
             config = {
@@ -114,7 +114,7 @@ in {
 
           {
             name        = "net-vlan2";
-            description = "Attach to VLAN 2 L2 pass-through bridge (gw 172.16.2.254)";
+            description = "Attach to VLAN 2 L2 pass-through bridge (gw 172.16.0.254)";
             config = {
               # Incus injects this as the container's cloud-init network-config.
               # Per-container static IP is set via:
@@ -126,7 +126,7 @@ in {
                 ethernets:
                   eth0:
                     dhcp4: false
-                    gateway4: 172.16.2.254
+                    gateway4: 172.16.0.254
                     nameservers:
                       addresses: [172.16.1.253]
               '';
