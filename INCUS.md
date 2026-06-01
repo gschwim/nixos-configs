@@ -8,7 +8,7 @@ Quick reference for launching instances on the incus host. The source of truth f
 | --- | --- | --- | --- | --- | --- |
 | `incusbr0` | NAT bridge | auto | yes | yes | Default isolated network. Containers reach the internet via SNAT; no inbound. |
 | `prod` | Routed bridge | 172.16.4.0/24 | yes (dynamic .100-.200) | no | DHCP pool, gateway `.254`. |
-| `vlan2` | L2 bridge over `dong0.2` | 172.16.0.0/24 | reservations only | no | Trunked to upstream VLAN 2. dnsmasq locked to `dhcp-ignore=tag:!known` — only registered MACs get a lease. |
+| `vlan2` | L2 bridge over `dong0.2` | 172.16.0.0/24 | none (set via cloud-init) | no | Pure pass-through. No IP on the bridge, no dnsmasq. Instances reach the upstream VLAN 2 gateway (172.16.0.254) directly. |
 
 ## Profile menu
 
@@ -28,37 +28,74 @@ Compose multiple profiles on launch — later profiles override same-named devic
 
 ## Deploy on `vlan2` with a static IP
 
-Pick an unused address in 172.16.0.0/24 (avoid the gateway `.254`, pleiades's bridge `.249`, and anything in `incus list` or `cat /var/lib/incus/networks/vlan2/dnsmasq.leases`).
+The `vlan2` bridge has no DHCP. Each instance gets its IP, gateway, and DNS from a `cloud-init.network-config` set at launch time. Use a Ubuntu image (`ubuntu:26.04`, official Ubuntu remote) — it ships cloud-init. The minimal `images:ubuntu/<release>` variants do not.
+
+Pick an unused address in 172.16.0.0/24 (avoid the gateway `.254` and anything in `incus list`).
 
 ### Container
 
 ```bash
-incus launch images:debian/12 web01 \
+incus launch ubuntu:26.04 web01 \
   --profile default \
   --profile basebuild01 \
   --profile net-vlan2 \
   --profile storage-40GB \
   --profile mem-4GB \
-  -d eth0,ipv4.address=172.16.0.50
+  --config cloud-init.network-config="version: 2
+ethernets:
+  primary:
+    match: { name: e* }
+    addresses: [172.16.0.50/24]
+    gateway4: 172.16.0.254
+    nameservers: { addresses: [172.16.1.253] }
+"
 ```
 
 - `default` provides the root disk; `net-vlan2` overrides the eth0 device default brings (later profile wins).
 - `basebuild01` is optional — drop it for a vanilla image.
-- `-d eth0,ipv4.address=…` writes the dnsmasq reservation **before** the container boots, so first-boot DHCP gets the reserved IP.
+- `match: { name: e* }` matches both `eth0` (containers) and `enpXsY` (VMs).
 
 ### VM
 
-Same as container, plus `--vm` and a CPU profile (containers default to host limits; VMs need an explicit shape):
+Same recipe with `--vm` and a CPU profile (containers default to host limits; VMs need an explicit shape):
 
 ```bash
-incus launch images:debian/12 web01 --vm \
+incus launch ubuntu:26.04 web01 --vm \
   --profile default \
   --profile basebuild01 \
   --profile net-vlan2 \
   --profile storage-40GB \
   --profile cpu-4 \
   --profile mem-4GB \
-  -d eth0,ipv4.address=172.16.0.50
+  --config cloud-init.network-config="version: 2
+ethernets:
+  primary:
+    match: { name: e* }
+    addresses: [172.16.0.50/24]
+    gateway4: 172.16.0.254
+    nameservers: { addresses: [172.16.1.253] }
+"
+```
+
+### One-line helper (recommended for repeat use)
+
+Drop this in `~/.zshrc` to centralize the VLAN 2 gateway/DNS values:
+
+```bash
+vlan2-launch() {
+  local name=$1 ip=$2; shift 2
+  incus launch ubuntu:26.04 "$name" --vm \
+    -p default -p net-vlan2 -p storage-40GB -p basebuild01 \
+    --config cloud-init.network-config="version: 2
+ethernets:
+  primary:
+    match: { name: e* }
+    addresses: [$ip/24]
+    gateway4: 172.16.0.254
+    nameservers: { addresses: [172.16.1.253] }
+" "$@"
+}
+# usage:  vlan2-launch web01 172.16.0.50
 ```
 
 ## Verify it worked
@@ -77,12 +114,25 @@ If `incus list` shows the instance Running but with no IPv4, see Troubleshooting
 
 ## Change the IP later
 
+Rewrite the instance's `cloud-init.network-config` and either re-run cloud-init in place or rebuild the instance.
+
+In-place (no rebuild):
+
 ```bash
-incus config device set web01 eth0 ipv4.address=172.16.0.51
-incus restart web01
+incus config set web01 cloud-init.network-config="version: 2
+ethernets:
+  primary:
+    match: { name: e* }
+    addresses: [172.16.0.51/24]
+    gateway4: 172.16.0.254
+    nameservers: { addresses: [172.16.1.253] }
+"
+incus exec web01 -- cloud-init clean --logs
+incus exec web01 -- cloud-init init
+incus exec web01 -- netplan apply
 ```
 
-The set updates the dnsmasq reservation immediately; the restart forces the container to re-DHCP and pick up the new lease. Without the restart it'll keep its current lease until expiry.
+Or just rebuild it (`incus delete --force web01 && vlan2-launch web01 172.16.0.51`) — usually faster if you don't have state to preserve.
 
 ## Other lifecycle operations
 
@@ -100,62 +150,42 @@ incus snapshot restore web01 pre-upgrade
 
 ## Troubleshooting
 
-**VM has no IPv4; in-guest interface is `enpXsY`, not `eth0`.**
-
-The likely cause is that the cloud-init network-config inside the VM references `eth0`, which doesn't exist (VMs get predictable naming). The `net-vlan2` profile sidesteps this by setting an explicit `cloud-init.network-config` that match-globs on `e*`. If the VM was launched before that profile change landed, cloud-init has already written a stale netplan — either re-run cloud-init or just rebuild the VM. To force re-run:
-
-```bash
-incus exec demo -- cloud-init clean --logs
-incus exec demo -- cloud-init init
-incus exec demo -- netplan apply
-```
-
-Confirm the netplan inside the VM now matches:
-
-```bash
-incus exec demo -- cat /etc/netplan/*.yaml
-# Expect a match: { name: "e*" } block with dhcp4: true
-```
-
-Then check the dnsmasq lease/reservation paths below to confirm the DHCP exchange completes.
-
 **Instance has no IPv4 after first boot.**
 
-1. Reservation registered?
+1. Did cloud-init actually consume the network-config? The image must ship cloud-init — `images:ubuntu/<release>` minimal variants do *not*; use `ubuntu:<release>` instead.
    ```bash
-   sudo cat /var/lib/incus/networks/vlan2/dnsmasq.hosts/web01.eth0
+   incus exec web01 -- which cloud-init
+   incus exec web01 -- cat /etc/netplan/*.yaml
    ```
-   Should contain `<mac>,172.16.0.50`. If missing, the `-d eth0,ipv4.address=…` flag didn't take — re-run `incus config device set web01 eth0 ipv4.address=…` and restart.
+   Expect a netplan that includes your address/gateway/nameservers. If the netplan is some default (e.g., `dhcp4: true` only), cloud-init didn't run or didn't get the config.
 
-2. dnsmasq running for this network?
+2. Did the launch carry the right config?
    ```bash
-   ps -ef | grep 'dnsmasq.*incus.*vlan2'
-   sudo cat /var/lib/incus/networks/vlan2/dnsmasq.raw
+   incus config show web01 | grep -A20 network-config
    ```
-   The raw config must include `dhcp-ignore=tag:!known` (the lockdown). If dnsmasq isn't running at all, `incus network info vlan2` will show the network state.
 
-3. dnsmasq actually handing out the lease?
+3. Force a cloud-init re-run (in case it ran before networking was ready):
    ```bash
-   sudo cat /var/lib/incus/networks/vlan2/dnsmasq.leases
+   incus exec web01 -- cloud-init clean --logs
+   incus exec web01 -- cloud-init init
+   incus exec web01 -- netplan apply
+   incus exec web01 -- ip -4 addr
    ```
-   You should see a line `<unix-timestamp> <mac> 172.16.0.50 web01 <client-id>`. Empty means no lease was issued — most likely the container's MAC doesn't match the reservation, which happens if you set `ipv4.address` *after* the container was launched without restarting it.
 
-4. Container is sending DHCP requests?
-   ```bash
-   incus exec web01 -- journalctl -u systemd-networkd -b   # or networking.service on older debian
-   ```
-   If it's not even trying DHCP, the image isn't configured to DHCP on eth0 by default — either fix the image or add a `cloud-init.network-config` to the instance with the right interface name.
+**Instance has the right IP but can't reach the upstream gateway (172.16.0.254).**
 
-**Container can reach the bridge (172.16.0.249) but not the upstream gateway (172.16.0.254).**
-
-Confirms the L2 path is fine and the issue is upstream of pleiades. Check the physical switch's VLAN 2 trunk config on the dong0 port, and confirm the upstream router/gateway is actually on VLAN 2.
-
-**dnsmasq replying to clients we didn't reserve.**
-
-The lockdown should prevent this. Confirm it's still in place:
+L2 path through the bridge is broken. Diagnose from pleiades:
 
 ```bash
-sudo cat /var/lib/incus/networks/vlan2/dnsmasq.raw | grep dhcp-ignore
+ip -d link show dong0.2                 # exists, up, vlan id 2?
+bridge link show | grep dong0.2         # master vlan2 state forwarding?
+ping -c 2 -I vlan2 172.16.0.254         # can pleiades reach the gateway via the bridge?
 ```
 
-Must show `dhcp-ignore=tag:!known`. If it's missing, `raw.dnsmasq` in [modules/services/incus.nix](modules/services/incus.nix) was changed — restore it and `nixos-rebuild switch`.
+- If `dong0.2` is missing → the VLAN subif didn't come up; `systemctl status dong0.2-netdev.service` and start it if needed.
+- If `bridge link` doesn't show dong0.2 enslaved → incus didn't enslave it. `sudo systemctl restart incus.service` usually fixes; if not, `sudo ip link set dong0.2 master vlan2`.
+- If pleiades itself can't ping the gateway via vlan2 → upstream switch isn't trunking VLAN 2 on the dong0 port, or the gateway isn't on VLAN 2.
+
+**Rebooted pleiades, vlan2 bridge has no ports.**
+
+This is the cold-boot race between `dong0.2-netdev.service` and `incus.service`. The systemd ordering edge in [hosts/pleiades/default.nix](hosts/pleiades/default.nix) (`systemd.services.incus.after = [ "dong0.2-netdev.service" ]; wants = [ ... ];`) prevents it. If it recurs, confirm the edge is still present and active: `systemctl show incus.service -p After | grep dong0.2-netdev`.

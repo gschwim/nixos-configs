@@ -52,33 +52,21 @@ in {
             };
           }
           {
-            # Incus-managed bridge for VLAN 2. The bridge enslaves dong0.2
-            # (the tagged trunk subif declared on the host) AND holds an IP
-            # on VLAN 2 so incus can run a dnsmasq on it for per-container
-            # DHCP reservations.
+            # Pure L2 pass-through for VLAN 2. The bridge enslaves dong0.2
+            # (the tagged trunk subif declared on the host) and carries NO
+            # IP, NO DHCP, NO NAT. Containers/VMs on this bridge sit on the
+            # same L2 segment as the rest of VLAN 2 and reach the upstream
+            # gateway (172.16.0.254) directly.
             #
-            # Per-container IP assignment:
-            #   incus config device set <ct> eth0 ipv4.address=172.16.0.X
-            # That writes a dhcp-host= entry into this network's dnsmasq;
-            # the container DHCPs at boot and receives the reserved IP plus
-            # the gateway (DHCP option 3) and DNS (option 6) announced below.
-            #
-            # WARNING: do not drop raw.dnsmasq=dhcp-ignore=tag:!known.
-            # Because dong0.2 is a port on this bridge, dnsmasq sees DHCP
-            # broadcasts from the entire VLAN 2 segment. Without that
-            # directive it would reply to any unknown client and become a
-            # rogue DHCP server on the VLAN.
+            # Per-instance IPs are set via cloud-init.network-config on each
+            # instance (or the launch helper) — incus runs no dnsmasq here,
+            # so DHCP-style reservations don't apply. See INCUS.md.
             name = "vlan2";
             type = "bridge";
             config = {
               "bridge.external_interfaces" = "dong0.2";
-              "ipv4.address"               = "172.16.0.249/24";
-              "ipv4.nat"                   = "false";
-              "ipv4.dhcp"                  = "true";
-              "ipv4.dhcp.gateway"          = "172.16.0.254";
-              "dns.nameservers"            = "172.16.1.253";
+              "ipv4.address"               = "none";
               "ipv6.address"               = "none";
-              "raw.dnsmasq"                = "dhcp-ignore=tag:!known";
             };
           }
         ];
@@ -129,30 +117,9 @@ in {
           { name = "net-prod";     description = "Attach to prod routed bridge (172.16.4.0/24)"; devices.eth0 = { type = "nic"; network = "prod";     name = "eth0"; }; }
           { name = "net-incusbr0"; description = "Attach to default NAT bridge";                  devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
-          {
-            # Per-instance IP: `incus config device set <ct> eth0 ipv4.address=172.16.0.X`.
-            # The instance DHCPs at boot; the vlan2 network's dnsmasq serves
-            # the reserved IP plus gateway 172.16.0.254 and DNS 172.16.1.253.
-            #
-            # cloud-init.network-config is set because incus's auto-generated
-            # config references the incus device name ("eth0"), which only
-            # matches inside CONTAINERS — VM kernels name virtio NICs e.g.
-            # enp5s0, so the auto-config doesn't match anything and DHCP never
-            # runs. Globbing on "e*" covers both naming schemes.
-            name        = "net-vlan2";
-            description = "Attach to VLAN 2 bridge (172.16.0.0/24, gw .254, DHCP reservations only)";
-            config = {
-              "cloud-init.network-config" = ''
-                version: 2
-                ethernets:
-                  primary:
-                    match:
-                      name: "e*"
-                    dhcp4: true
-              '';
-            };
-            devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; };
-          }
+          # Per-instance IP/GW/DNS come from a cloud-init.network-config on
+          # each instance (see INCUS.md). The profile is just the attachment.
+          { name = "net-vlan2"; description = "Attach to VLAN 2 L2 pass-through bridge"; devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; }; }
 
           { name = "disk-default"; description = "Root disk on default ZFS pool"; devices.root = { type = "disk"; pool = "default"; path = "/"; }; }
 
