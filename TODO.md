@@ -1,4 +1,21 @@
-# TODO: pre-public-release cleanup
+# TODO
+
+## Fleet management gaps
+
+### Incus preseed reconciliation
+
+`virtualisation.incus.preseed` is one-shot — `incus admin init --preseed` initializes a fresh incus but does not reconcile against existing state. When the preseed in nix changes (e.g., a network or profile is added, removed, or modified) and `nixos-rebuild switch` is run, the *file* updates but the *live incus state* stays stale. Manual sync via `incus network edit` / `incus profile edit` / `incus network unset` is currently required after every relevant rebuild.
+
+This is a known issue in the incus + NixOS community; the upstream `incus admin init` doesn't have a "force re-apply with reconcile" mode.
+
+**Path forward** (deferred while we're still iterating; full rebuilds via [scripts/install-host.sh](scripts/install-host.sh) suffice for now):
+
+- Write a reconciler in [scripts/](scripts/) that reads the rendered preseed YAML at `/etc/incus/preseed.yaml`, compares against live state via `incus network show` / `incus profile show`, and emits `incus network set/unset` + `incus profile edit` to bring live state into alignment. Default to `--dry-run`; require `--apply` to execute. Install via the same `writeShellApplication` machinery as `incus-launch` so it lands on every incus host.
+- Optionally wire it as a `systemd.services.incus-reconcile` oneshot ordered `After=incus.service`, firing on every nixos-rebuild activation. Only enable once the script has been hand-run enough to be trusted.
+
+---
+
+# Pre-public-release cleanup
 
 The [README.md](README.md) uses generic placeholders (`<user>`, `<workstation>`, `<path-to-kdbx>`, etc.) so the doc itself doesn't expose identifying information. The code and scripts, however, still hardcode several identifiers. None of these break anything as-is — changing them might. Each entry below lists the locations and the risk of cleaning it up.
 
