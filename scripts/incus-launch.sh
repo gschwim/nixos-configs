@@ -112,12 +112,23 @@ for spec in "${NET_SPECS[@]}"; do
   iface="eth$i"
   key="net$i"
 
-  # type=nic + network=<incus-managed-network> lets -d create the device
-  # from scratch (when no profile defines eth0) or override an existing
-  # one (e.g. basebuild01's eth0 on incusbr0). Using `network=` is the
-  # right spec for incus-managed networks; `parent=` is for unmanaged
-  # bridges and would conflict with profiles that set `network=`.
-  DEVICE_ARGS+=(-d "${iface},type=nic,network=${net},hwaddr=${mac}")
+  # `-d` has two syntaxes depending on whether the device already exists:
+  #   * OVERRIDE (key=value only):       -d <name>,<key>=<value>,...
+  #     Modifies an existing device. The type is inherited; setting
+  #     `type=...` here makes incus's parser misread the rest of the
+  #     string as the type value ("Invalid device type" error).
+  #   * CREATE  (positional type):       -d <name>,<type>,<key>=<value>,...
+  #     Defines a new device. The type sits between the name and the
+  #     first key=value as a bare positional field.
+  #
+  # eth0 is provided by basebuild01 (on incusbr0) — we override it to
+  # switch the attachment to ${net}. eth1+ aren't predefined anywhere,
+  # so we create them.
+  if [ "$i" -eq 0 ]; then
+    DEVICE_ARGS+=(-d "${iface},network=${net},hwaddr=${mac}")
+  else
+    DEVICE_ARGS+=(-d "${iface},nic,network=${net},hwaddr=${mac}")
+  fi
 
   NETPLAN_BLOCKS="${NETPLAN_BLOCKS}
   ${key}:
