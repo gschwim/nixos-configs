@@ -84,9 +84,21 @@ if [ "${1:-}" = "--" ]; then
   EXTRA_ARGS=("$@")
 fi
 
-# ---- build device flags + cloud-init network-config ------------------------
+# ---- build init args + extra device list + cloud-init network-config ------
 
-DEVICE_ARGS=()
+# incus's `-d` flag is strictly OVERRIDE syntax (`<device>,<key>=<value>`,
+# single key per flag — incus merges multiple flags for the same device).
+# It cannot create devices. `-d eth1,nic` errors with "Bad device override
+# syntax". The only way to add a new device via the CLI is via the separate
+# `incus config device add` command, which means we can't use `incus launch`
+# (single-shot) for multi-NIC.
+#
+# Flow: `incus init` (creates without starting) → `incus config device add`
+# for each NIC beyond eth0 → `incus start`. Single-NIC launches go through
+# the same path; init+start is equivalent to launch with no extra overhead.
+
+INIT_ARGS=()        # -d/--config flags passed to `incus init`
+EXTRA_DEVICES=()    # ethN (N>0): "iface|net|mac", added post-init
 NETPLAN_BLOCKS=""
 
 i=0
@@ -112,26 +124,13 @@ for spec in "${NET_SPECS[@]}"; do
   iface="eth$i"
   key="net$i"
 
-  # `-d` accepts ONE key=value per flag — packing multiple comma-separated
-  # `k=v` pairs greedy-matches the first value to end of string ("Invalid
-  # device type" / "Network not found 'vlan2,hwaddr=...'" errors). Stack
-  # multiple `-d` flags for the same device instead; incus merges them.
-  #
-  # Two syntaxes per device:
-  #   * OVERRIDE  -d <name>,<key>=<value>        (existing device; inherits type)
-  #   * CREATE    -d <name>,<type>               (new device, positional type — no `=`)
-  #               -d <name>,<key>=<value>        (add config keys to the new device)
-  #
-  # eth0 is provided by basebuild01 (on incusbr0) — override its network and
-  # add the pinned MAC. eth1+ aren't predefined anywhere — create them with
-  # positional type, then layer on network + MAC via additional -d flags.
+  # eth0 is provided by basebuild01 (on incusbr0) — override at init time
+  # via -d. eth1+ don't exist yet — defer to post-init device-add.
   if [ "$i" -eq 0 ]; then
-    DEVICE_ARGS+=(-d "${iface},network=${net}")
-    DEVICE_ARGS+=(-d "${iface},hwaddr=${mac}")
+    INIT_ARGS+=(-d "${iface},network=${net}")
+    INIT_ARGS+=(-d "${iface},hwaddr=${mac}")
   else
-    DEVICE_ARGS+=(-d "${iface},nic")
-    DEVICE_ARGS+=(-d "${iface},network=${net}")
-    DEVICE_ARGS+=(-d "${iface},hwaddr=${mac}")
+    EXTRA_DEVICES+=("${iface}|${net}|${mac}")
   fi
 
   NETPLAN_BLOCKS="${NETPLAN_BLOCKS}
@@ -148,10 +147,20 @@ NETWORK_CONFIG="version: 2
 ethernets:${NETPLAN_BLOCKS}
 "
 
-# ---- launch ----------------------------------------------------------------
+# ---- init → device-add for ethN (N>0) → start ------------------------------
 
-incus launch "$IMAGE" "$NAME" \
+echo "Initializing ${NAME} from ${IMAGE}"
+incus init "$IMAGE" "$NAME" \
   "${VM_FLAG[@]}" \
-  "${DEVICE_ARGS[@]}" \
+  "${INIT_ARGS[@]}" \
   --config "cloud-init.network-config=${NETWORK_CONFIG}" \
   "${EXTRA_ARGS[@]}"
+
+for entry in "${EXTRA_DEVICES[@]}"; do
+  IFS='|' read -r iface net mac <<<"$entry"
+  echo "Adding device ${iface} on ${net}"
+  incus config device add "$NAME" "$iface" nic network="$net" hwaddr="$mac"
+done
+
+echo "Starting ${NAME}"
+incus start "$NAME"
