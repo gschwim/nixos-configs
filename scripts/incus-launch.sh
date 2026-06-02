@@ -112,22 +112,26 @@ for spec in "${NET_SPECS[@]}"; do
   iface="eth$i"
   key="net$i"
 
-  # `-d` has two syntaxes depending on whether the device already exists:
-  #   * OVERRIDE (key=value only):       -d <name>,<key>=<value>,...
-  #     Modifies an existing device. The type is inherited; setting
-  #     `type=...` here makes incus's parser misread the rest of the
-  #     string as the type value ("Invalid device type" error).
-  #   * CREATE  (positional type):       -d <name>,<type>,<key>=<value>,...
-  #     Defines a new device. The type sits between the name and the
-  #     first key=value as a bare positional field.
+  # `-d` accepts ONE key=value per flag — packing multiple comma-separated
+  # `k=v` pairs greedy-matches the first value to end of string ("Invalid
+  # device type" / "Network not found 'vlan2,hwaddr=...'" errors). Stack
+  # multiple `-d` flags for the same device instead; incus merges them.
   #
-  # eth0 is provided by basebuild01 (on incusbr0) — we override it to
-  # switch the attachment to ${net}. eth1+ aren't predefined anywhere,
-  # so we create them.
+  # Two syntaxes per device:
+  #   * OVERRIDE  -d <name>,<key>=<value>        (existing device; inherits type)
+  #   * CREATE    -d <name>,<type>               (new device, positional type — no `=`)
+  #               -d <name>,<key>=<value>        (add config keys to the new device)
+  #
+  # eth0 is provided by basebuild01 (on incusbr0) — override its network and
+  # add the pinned MAC. eth1+ aren't predefined anywhere — create them with
+  # positional type, then layer on network + MAC via additional -d flags.
   if [ "$i" -eq 0 ]; then
-    DEVICE_ARGS+=(-d "${iface},network=${net},hwaddr=${mac}")
+    DEVICE_ARGS+=(-d "${iface},network=${net}")
+    DEVICE_ARGS+=(-d "${iface},hwaddr=${mac}")
   else
-    DEVICE_ARGS+=(-d "${iface},nic,network=${net},hwaddr=${mac}")
+    DEVICE_ARGS+=(-d "${iface},nic")
+    DEVICE_ARGS+=(-d "${iface},network=${net}")
+    DEVICE_ARGS+=(-d "${iface},hwaddr=${mac}")
   fi
 
   NETPLAN_BLOCKS="${NETPLAN_BLOCKS}
