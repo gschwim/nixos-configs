@@ -20,7 +20,7 @@ Compose multiple profiles on launch — later profiles override same-named devic
 | | `basebuild01` | cloud-init: apt update/upgrade, installs openssh-server + neovim + zsh, creates a sudo user with SSH key. No devices. |
 | Network | `net-incusbr0` | `eth0` on `incusbr0` (NAT). |
 | | `net-prod` | `eth0` on `prod` (routed 172.16.4.0/24). |
-| | `net-vlan2` | `eth0` on `vlan2` (VLAN 2, DHCP reservations only). |
+| | _(none for `vlan2`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
 | Storage | `storage-10GB` / `40GB` / `80GB` / `100GB` | Sized root disk on `default` pool. |
 | | `disk-default` | Root disk on `default` pool, unsized. |
 | CPU | `cpu-1` / `cpu-4` / `cpu-8` | `limits.cpu` =N. |
@@ -28,75 +28,44 @@ Compose multiple profiles on launch — later profiles override same-named devic
 
 ## Deploy on `vlan2` with a static IP
 
-The `vlan2` bridge has no DHCP. Each instance gets its IP, gateway, and DNS from a `cloud-init.network-config` set at launch time. Use a Ubuntu image (`ubuntu:26.04`, official Ubuntu remote) — it ships cloud-init. The minimal `images:ubuntu/<release>` variants do not.
+`vlan2` is a pure L2 pass-through — no DHCP on the bridge. Each instance needs its IP/gateway/DNS injected via cloud-init at launch. The `incus-launch` command (installed system-wide on any host with `my.services.incus.enable = true`; source at [scripts/incus-launch.sh](scripts/incus-launch.sh)) does this in one shot.
+
+```
+incus-launch <name> <image> [--vm] <net>:<ip>[/<prefix>] [<net>:<ip>...] [-- <extra incus flags>]
+```
+
+Use a cloud-init-capable image — `ubuntu:<release>` (official Ubuntu remote) is the easy choice; the minimal `images:ubuntu/<release>` variants do not ship cloud-init.
 
 Pick an unused address in 172.16.0.0/24 (avoid the gateway `.254` and anything in `incus list`).
 
 ### Container
 
 ```bash
-incus launch ubuntu:26.04 web01 \
-  --profile default \
-  --profile basebuild01 \
-  --profile net-vlan2 \
-  --profile storage-40GB \
-  --profile mem-4GB \
-  --config cloud-init.network-config="version: 2
-ethernets:
-  primary:
-    match: { name: e* }
-    addresses: [172.16.0.50/24]
-    gateway4: 172.16.0.254
-    nameservers: { addresses: [172.16.1.253] }
-"
+incus-launch web01 ubuntu:26.04 vlan2:172.16.0.50 \
+  -- -p default -p basebuild01 -p storage-40GB -p mem-4GB
 ```
-
-- `default` provides the root disk; `net-vlan2` overrides the eth0 device default brings (later profile wins).
-- `basebuild01` is optional — drop it for a vanilla image.
-- `match: { name: e* }` matches both `eth0` (containers) and `enpXsY` (VMs).
 
 ### VM
 
-Same recipe with `--vm` and a CPU profile (containers default to host limits; VMs need an explicit shape):
-
 ```bash
-incus launch ubuntu:26.04 web01 --vm \
-  --profile default \
-  --profile basebuild01 \
-  --profile net-vlan2 \
-  --profile storage-40GB \
-  --profile cpu-4 \
-  --profile mem-4GB \
-  --config cloud-init.network-config="version: 2
-ethernets:
-  primary:
-    match: { name: e* }
-    addresses: [172.16.0.50/24]
-    gateway4: 172.16.0.254
-    nameservers: { addresses: [172.16.1.253] }
-"
+incus-launch web02 ubuntu:26.04 --vm vlan2:172.16.0.50 \
+  -- -p default -p basebuild01 -p storage-40GB -p cpu-4 -p mem-4GB
 ```
 
-### One-line helper (recommended for repeat use)
-
-Drop this in `~/.zshrc` to centralize the VLAN 2 gateway/DNS values:
+### Two NICs (e.g., vlan2 + vlan3)
 
 ```bash
-vlan2-launch() {
-  local name=$1 ip=$2; shift 2
-  incus launch ubuntu:26.04 "$name" --vm \
-    -p default -p net-vlan2 -p storage-40GB -p basebuild01 \
-    --config cloud-init.network-config="version: 2
-ethernets:
-  primary:
-    match: { name: e* }
-    addresses: [$ip/24]
-    gateway4: 172.16.0.254
-    nameservers: { addresses: [172.16.1.253] }
-" "$@"
-}
-# usage:  vlan2-launch web01 172.16.0.50
+incus-launch web03 ubuntu:26.04 --vm vlan2:172.16.0.50 vlan3:10.0.3.50 \
+  -- -p default -p storage-40GB -p mem-4GB
 ```
+
+The script auto-generates a stable MAC per `(instance-name, network-name)` pair and writes a netplan that matches on MAC, so the same instance name always gets the same MACs (upstream ARP caches stay valid across re-launches) and multi-NIC matching can't get confused by kernel naming.
+
+### Adding a new L2-passthrough network
+
+1. Define the incus network in [modules/services/incus.nix](modules/services/incus.nix) (mirror the `vlan2` shape: `bridge.external_interfaces = "<trunk>"`, `ipv4.address = "none"`).
+2. Add a row to the `NET_GW`/`NET_DNS`/`NET_PREFIX` tables at the top of [scripts/incus-launch.sh](scripts/incus-launch.sh).
+3. `nixos-rebuild switch` on each host that runs incus. Plan for a reboot ([see the network-changes-need-a-reboot pattern](#troubleshooting)).
 
 ## Verify it worked
 
@@ -110,19 +79,25 @@ incus exec web01 -- ping -c 2 172.16.0.254            # reach the upstream gatew
 
 If `incus list` shows the instance Running but with no IPv4, see Troubleshooting below.
 
-> **VMs vs containers and interface names.** Containers see the NIC as `eth0` (incus presents the veth's container side with that name). VMs see it as whatever their kernel's predictable naming yields — typically `enp5s0` or `ens3`. The `net-vlan2` profile carries a `cloud-init.network-config` that match-globs on `e*` so DHCP runs on either name. Don't reach inside the VM and assume `eth0`.
+> **VMs vs containers and interface names.** Containers see the NIC as `eth0` (incus presents the veth's container side with that name). VMs see it as whatever their kernel's predictable naming yields — typically `enp5s0` or `ens3`. `incus-launch` sidesteps this entirely by matching on the MAC it generated, not the interface name. Don't reach inside the VM and assume `eth0`.
 
 ## Change the IP later
 
-Rewrite the instance's `cloud-init.network-config` and either re-run cloud-init in place or rebuild the instance.
-
-In-place (no rebuild):
+The MAC the script generates is keyed on `(instance-name, network-name)`, so re-launching the same instance name gets the same MAC. Easiest path is to delete and re-launch with the new IP:
 
 ```bash
+incus delete --force web01
+incus-launch web01 ubuntu:26.04 vlan2:172.16.0.51 -- -p default -p storage-40GB
+```
+
+In-place change without rebuild (preserves instance state):
+
+```bash
+# Render the netplan you want, then:
 incus config set web01 cloud-init.network-config="version: 2
 ethernets:
-  primary:
-    match: { name: e* }
+  net0:
+    match: { macaddress: \"<mac>\" }      # same MAC as currently configured
     addresses: [172.16.0.51/24]
     gateway4: 172.16.0.254
     nameservers: { addresses: [172.16.1.253] }
@@ -132,7 +107,7 @@ incus exec web01 -- cloud-init init
 incus exec web01 -- netplan apply
 ```
 
-Or just rebuild it (`incus delete --force web01 && vlan2-launch web01 172.16.0.51`) — usually faster if you don't have state to preserve.
+(Get the existing MAC from `incus config show web01 --expanded | grep hwaddr`.)
 
 ## Other lifecycle operations
 

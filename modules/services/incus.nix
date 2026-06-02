@@ -1,4 +1,4 @@
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 let
   cfg = config.my.services.incus;
 in {
@@ -117,9 +117,13 @@ in {
           { name = "net-prod";     description = "Attach to prod routed bridge (172.16.4.0/24)"; devices.eth0 = { type = "nic"; network = "prod";     name = "eth0"; }; }
           { name = "net-incusbr0"; description = "Attach to default NAT bridge";                  devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
-          # Per-instance IP/GW/DNS come from a cloud-init.network-config on
-          # each instance (see INCUS.md). The profile is just the attachment.
-          { name = "net-vlan2"; description = "Attach to VLAN 2 L2 pass-through bridge"; devices.eth0 = { type = "nic"; network = "vlan2"; name = "eth0"; }; }
+          # No net-vlan2 profile: the vlan2 bridge has no DHCP, so a
+          # bare attachment is insufficient (instance also needs IP/GW/DNS
+          # injected). Use `incus-launch` (scripts/incus-launch.sh) instead
+          # — it emits both the device attachment and cloud-init network-
+          # config in one shot, with stable MAC-based per-NIC matching.
+          # Profile-style attachment also doesn't compose for multi-NIC
+          # (two profiles can't both define eth0).
 
           { name = "disk-default"; description = "Root disk on default ZFS pool"; devices.root = { type = "disk"; pool = "default"; path = "/"; }; }
 
@@ -135,6 +139,17 @@ in {
         ];
       };
     };
+
+    # Fleet-wide launch helper for L2-passthrough networks (no DHCP on the
+    # bridge). Generates MAC-pinned cloud-init network-config from the
+    # network metadata baked into the script. Source: scripts/incus-launch.sh.
+    environment.systemPackages = [
+      (pkgs.writeShellApplication {
+        name = "incus-launch";
+        runtimeInputs = with pkgs; [ incus coreutils ];
+        text = builtins.readFile ../../scripts/incus-launch.sh;
+      })
+    ];
 
     networking.firewall.allowedTCPPorts = [ 8443 ];
     # vlan2 deliberately NOT trusted: the bridge has an IP on VLAN 2, so
