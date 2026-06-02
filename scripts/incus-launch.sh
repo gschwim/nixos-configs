@@ -112,7 +112,12 @@ for spec in "${NET_SPECS[@]}"; do
   iface="eth$i"
   key="net$i"
 
-  DEVICE_ARGS+=(-d "${iface},nictype=bridged,parent=${net},hwaddr=${mac}")
+  # type=nic + network=<incus-managed-network> lets -d create the device
+  # from scratch (when no profile defines eth0) or override an existing
+  # one (e.g. basebuild01's eth0 on incusbr0). Using `network=` is the
+  # right spec for incus-managed networks; `parent=` is for unmanaged
+  # bridges and would conflict with profiles that set `network=`.
+  DEVICE_ARGS+=(-d "${iface},type=nic,network=${net},hwaddr=${mac}")
 
   NETPLAN_BLOCKS="${NETPLAN_BLOCKS}
   ${key}:

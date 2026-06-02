@@ -17,7 +17,7 @@ Compose multiple profiles on launch — later profiles override same-named devic
 | Category | Profile | Effect |
 | --- | --- | --- |
 | Bootstrap | `default` | Root disk on `default` pool + `eth0` on `incusbr0`. |
-| | `basebuild01` | cloud-init: apt update/upgrade, installs openssh-server + neovim + zsh, creates a sudo user with SSH key. No devices. |
+| | `basebuild01` | Standalone starter: same root + eth0 as `default`, plus cloud-init (apt update/upgrade, openssh-server + neovim + zsh, sudo user with SSH key). Apply alone — no need to also apply `default`. |
 | Network | `net-incusbr0` | `eth0` on `incusbr0` (NAT). |
 | | `net-prod` | `eth0` on `prod` (routed 172.16.4.0/24). |
 | | _(none for `vlan2`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
@@ -42,22 +42,24 @@ Pick an unused address in 172.16.0.0/24 (avoid the gateway `.254` and anything i
 
 ```bash
 incus-launch web01 ubuntu:26.04 vlan2:172.16.0.50 \
-  -- -p default -p basebuild01 -p storage-40GB -p mem-4GB
+  -- -p basebuild01 -p storage-40GB -p mem-4GB
 ```
 
 ### VM
 
 ```bash
 incus-launch web02 ubuntu:26.04 --vm vlan2:172.16.0.50 \
-  -- -p default -p basebuild01 -p storage-40GB -p cpu-4 -p mem-4GB
+  -- -p basebuild01 -p storage-40GB -p cpu-4 -p mem-4GB
 ```
 
 ### Two NICs (e.g., vlan2 + vlan3)
 
 ```bash
 incus-launch web03 ubuntu:26.04 --vm vlan2:172.16.0.50 vlan3:10.0.3.50 \
-  -- -p default -p storage-40GB -p mem-4GB
+  -- -p basebuild01 -p storage-40GB -p mem-4GB
 ```
+
+`basebuild01` is the recommended starter — it provides the root disk, cloud-init for the admin user, *and* an `eth0` on `incusbr0` that `incus-launch` overrides to your chosen network. You don't need to also apply `-p default`.
 
 The script auto-generates a stable MAC per `(instance-name, network-name)` pair and writes a netplan that matches on MAC, so the same instance name always gets the same MACs (upstream ARP caches stay valid across re-launches) and multi-NIC matching can't get confused by kernel naming.
 

@@ -81,8 +81,13 @@ in {
           }
 
           {
+            # Standalone starter profile: root disk + eth0 on the NAT
+            # bridge + cloud-init for the admin user. Apply alone (with
+            # optional storage/cpu/mem profiles) — no need to also apply
+            # `default`. incus-launch overrides eth0's network when
+            # attaching to L2-passthrough networks like vlan2.
             name = "basebuild01";
-            description = "Base VM/Container image";
+            description = "Base VM/Container image (root + eth0/incusbr0 + cloud-init)";
             config = {
               "user.user-data" = ''
                 #cloud-config
@@ -106,6 +111,7 @@ in {
             };
             devices = {
               root = { type = "disk"; pool = "default"; path = "/"; };
+              eth0 = { type = "nic";  network = "incusbr0"; name = "eth0"; };
             };
           }
 
