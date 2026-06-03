@@ -69,6 +69,15 @@ in {
     cryptsetup
   ];
 
+  # No-op the fleet-wide initial-password-expiry activation script. On a
+  # normal host that forces the admin to set a password on first login
+  # (good practice); on the live installer it breaks install-host.sh,
+  # because PAM treats sudo on an expired-password account as auth-failed
+  # even when wheelNeedsPassword = false. The installer is ephemeral and
+  # SSH-key-protected anyway — no value in expiring the throwaway initial
+  # password here.
+  system.activationScripts.expireSchwimInitialPassword.text = lib.mkForce "";
+
   # The installation-cd module sets stateVersion via the installer base; do
   # not override.
 }
