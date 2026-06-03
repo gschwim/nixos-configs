@@ -10,7 +10,11 @@
 
   my.disko = {
     enable   = true;
-    disk     = "/dev/sda";                   # confirm at install
+    # MUST EDIT before install. Default is intentionally invalid so disko
+    # fails-fast instead of wiping whichever real device happens to be at
+    # /dev/sda on the target — that path could be the installer USB itself.
+    # Set to the actual install disk (e.g. /dev/nvme0n1, /dev/vda).
+    disk     = "/dev/????";
     swapSize = "4G";
   };
 
