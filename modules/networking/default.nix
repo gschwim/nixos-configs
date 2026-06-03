@@ -69,6 +69,13 @@ in {
     networking.nftables.enable       = true;
     networking.firewall.enable       = true;
 
+    # Don't run dhcpcd by default. With this on (NixOS default), dhcpcd
+    # starts even when no interface actually uses DHCP — it just watches
+    # for unconfigured interfaces. Hosts that need DHCP opt in via
+    # `networking.interfaces.<iface>.useDHCP = true;`. NetworkManager-
+    # managed hosts are unaffected (NM does its own DHCP independently).
+    networking.useDHCP = false;
+
     networking.networkmanager.unmanaged = lib.mkIf nmOn (lib.unique (
       cfg.networkmanager.unmanaged
       ++ map (n: "interface-name:${n}") (staticIfaces ++ incusIfaces)
