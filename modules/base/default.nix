@@ -50,6 +50,59 @@ in {
   # without juggling another password.
   security.sudo.wheelNeedsPassword = false;
 
+  # Pre-stage schwim's working dir with the fleet's repos. Runs once per
+  # host (marker file in $HOME/.cache); idempotent on rerun. Cloned via
+  # HTTPS so it works without SSH keys being set up yet — user can
+  # `git remote set-url` to ssh later if they want to push.
+  systemd.services.schwim-staging = {
+    description = "Pre-clone fleet repos into schwim's home";
+    wantedBy    = [ "multi-user.target" ];
+    after       = [ "network-online.target" ];
+    wants       = [ "network-online.target" ];
+    serviceConfig = {
+      Type            = "oneshot";
+      User            = "schwim";
+      Group           = "users";
+      RemainAfterExit = true;
+    };
+    script = ''
+      set -eu
+      SRC_DIR="$HOME/src"
+      DONE_MARKER="$HOME/.cache/nixos-configs/staging-done"
+
+      [ -e "$DONE_MARKER" ] && exit 0
+
+      mkdir -p "$SRC_DIR" "$(dirname "$DONE_MARKER")"
+
+      for repo in nix-home-manager nixos-configs; do
+        [ -d "$SRC_DIR/$repo" ] && continue
+        ${pkgs.git}/bin/git -C "$SRC_DIR" clone \
+          "https://github.com/gschwim/$repo.git"
+      done
+
+      touch "$DONE_MARKER"
+    '';
+  };
+
+  # First-login walk-through. Shown on every login until the user removes
+  # /etc/motd or sets `users.motd = ""` in the host's nix file.
+  users.motd = ''
+
+    ── First-time setup ─────────────────────────────────────────────────
+      1. zsh-newuser-install will prompt: press [2] to accept the
+         recommended default ~/.zshrc (home-manager will overwrite it
+         in step 2 anyway, so the exact choice doesn't matter — just
+         pick something so zsh stops asking).
+
+      2. Stage your home environment:
+           cd ~/src/nix-home-manager && home-manager switch
+
+    Repos pre-cloned in ~/src/ via HTTPS. To push, switch the remote:
+      git -C ~/src/<repo> remote set-url origin git@github.com:gschwim/<repo>.git
+    ─────────────────────────────────────────────────────────────────────
+
+  '';
+
   environment.systemPackages = with pkgs; [
     neovim
     btop
