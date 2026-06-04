@@ -50,12 +50,17 @@ in {
   # without juggling another password.
   security.sudo.wheelNeedsPassword = false;
 
-  # Pre-stage schwim's working dir with the fleet's repos. Runs once per
-  # host (marker file in $HOME/.cache); idempotent on rerun. Cloned via
-  # HTTPS so it works without SSH keys being set up yet — user can
-  # `git remote set-url` to ssh later if they want to push.
+  # Pre-stage schwim's home on first boot:
+  #  - default ~/.zshrc so zsh-newuser-install doesn't prompt interactively
+  #    (home-manager intentionally overwrites this file on first `switch`)
+  #  - fleet repos under ~/src (HTTPS clone; user can `git remote set-url`
+  #    to ssh later if they want to push)
+  #
+  # Both checks are idempotent. The .zshrc check runs every boot (cheap
+  # stat-check; only writes if missing). The clone is marker-gated so it
+  # runs once per host's lifetime.
   systemd.services.schwim-staging = {
-    description = "Pre-clone fleet repos into schwim's home";
+    description = "Pre-stage schwim's home: default .zshrc + fleet repos";
     wantedBy    = [ "multi-user.target" ];
     after       = [ "network-online.target" ];
     wants       = [ "network-online.target" ];
@@ -67,40 +72,62 @@ in {
     };
     script = ''
       set -eu
+
+      # 1. Default .zshrc — matches what `zsh-newuser-install` option 2
+      #    would create. With this in place the interactive prompt
+      #    doesn't fire on first login.
+      if [ ! -e "$HOME/.zshrc" ]; then
+        cat > "$HOME/.zshrc" <<'ZSHRC'
+# Lines configured by zsh-newuser-install
+HISTFILE=~/.histfile
+HISTSIZE=1000
+SAVEHIST=1000
+bindkey -e
+# End of lines configured by zsh-newuser-install
+# The following lines were added by compinstall
+zstyle :compinstall filename '~/.zshrc'
+
+autoload -Uz compinit
+compinit
+# End of lines added by compinstall
+ZSHRC
+      fi
+
+      # 2. Fleet repos. Marker-gated so we don't re-clone on every boot.
       SRC_DIR="$HOME/src"
       DONE_MARKER="$HOME/.cache/nixos-configs/staging-done"
-
-      [ -e "$DONE_MARKER" ] && exit 0
-
-      mkdir -p "$SRC_DIR" "$(dirname "$DONE_MARKER")"
-
-      for repo in nix-home-manager nixos-configs; do
-        [ -d "$SRC_DIR/$repo" ] && continue
-        ${pkgs.git}/bin/git -C "$SRC_DIR" clone \
-          "https://github.com/gschwim/$repo.git"
-      done
-
-      touch "$DONE_MARKER"
+      if [ ! -e "$DONE_MARKER" ]; then
+        mkdir -p "$SRC_DIR" "$(dirname "$DONE_MARKER")"
+        for repo in nix-home-manager nixos-configs; do
+          [ -d "$SRC_DIR/$repo" ] && continue
+          ${pkgs.git}/bin/git -C "$SRC_DIR" clone \
+            "https://github.com/gschwim/$repo.git"
+        done
+        touch "$DONE_MARKER"
+      fi
     '';
   };
 
-  # First-login walk-through. Shown on every login until the user removes
-  # /etc/motd or sets `users.motd = ""` in the host's nix file.
-  users.motd = ''
+  # First-login hint, self-clearing. Prints on login shells (not on every
+  # subshell open) while the user hasn't yet run `home-manager switch` —
+  # detected by the absence of the HM profile marker. Once HM has been
+  # set up, the marker exists and the message stops appearing. No /etc/motd
+  # to clean up manually.
+  programs.zsh.loginShellInit = ''
+    if [ "$USER" = "schwim" ] && [ ! -e "$HOME/.local/state/nix/profiles/home-manager" ]; then
+      cat <<'MSG'
 
-    ── First-time setup ─────────────────────────────────────────────────
-      1. zsh-newuser-install will prompt: press [2] to accept the
-         recommended default ~/.zshrc (home-manager will overwrite it
-         in step 2 anyway, so the exact choice doesn't matter — just
-         pick something so zsh stops asking).
+    ── First-time setup ─────────────────────────────────
+      Stage your home environment:
+        cd ~/src/nix-home-manager && home-manager switch
 
-      2. Stage your home environment:
-           cd ~/src/nix-home-manager && home-manager switch
+      Repos in ~/src are cloned via HTTPS. For SSH push:
+        git -C ~/src/<repo> remote set-url origin \
+          git@github.com:gschwim/<repo>.git
+    ─────────────────────────────────────────────────────
 
-    Repos pre-cloned in ~/src/ via HTTPS. To push, switch the remote:
-      git -C ~/src/<repo> remote set-url origin git@github.com:gschwim/<repo>.git
-    ─────────────────────────────────────────────────────────────────────
-
+    MSG
+    fi
   '';
 
   environment.systemPackages = with pkgs; [
