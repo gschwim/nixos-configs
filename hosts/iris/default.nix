@@ -10,17 +10,17 @@
 
   my.disko = {
     enable   = true;
-    disk     = "/dev/sda";                   # confirm at install
+    disk     = "/dev/nvme0n1";                   # confirm at install
     swapSize = "4G";
   };
 
   my.network.static = {
     enable       = true;
-    interface    = "eno1";                   # confirm at install
-    address      = "172.16.1.156";           # placeholder — choose real value
+    interface    = "enp3s0";                   # confirm at install
+    address      = "172.16.1.250";           # placeholder — choose real value
     prefixLength = 24;
     gateway      = "172.16.1.254";
-    nameservers  = [ "172.16.1.253" "8.8.8.8" ];
+    nameservers  = [ "172.16.1.253" ];
   };
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.

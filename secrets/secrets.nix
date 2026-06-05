@@ -107,7 +107,7 @@ let
   blushda = "age1gumg838j0s9fpmly4umss05e994dh7zgq6j94fyx8tel9v6nqansn8aq9p";
 
   pleiades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoCf/2e719Y8SzpIc4clVYtde8HEeq+3oLIbtkWDkJ2";
-  iris    = "ssh-ed25519 AAAA_REPLACE_WITH_IRIS_HOST_PUBKEY";
+  iris = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILRcZcUlVW7MrL/SojLy247C0IHvi1f7RrS/ZCpfvoR8";
 
   # ---- Access lists --------------------------------------------------------
   # Filter placeholder identities out of any list. Once gen-host-key.sh
