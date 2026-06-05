@@ -50,85 +50,20 @@ in {
   # without juggling another password.
   security.sudo.wheelNeedsPassword = false;
 
-  # Pre-stage schwim's home on first boot:
-  #  - default ~/.zshrc so zsh-newuser-install doesn't prompt interactively
-  #    (home-manager intentionally overwrites this file on first `switch`)
-  #  - fleet repos under ~/src (HTTPS clone; user can `git remote set-url`
-  #    to ssh later if they want to push)
+  # Pre-stage a default ~/.zshrc for schwim. The file is a working zsh
+  # config (matches zsh-newuser-install option 2) plus a first-login
+  # bootstrap block that prompts the user whether to clone the fleet
+  # repos into ~/src. Declining defers the prompt to the next login;
+  # accepting clones and then prints the home-manager hint. After
+  # `home-manager switch`, HM overwrites this file with its own config.
   #
-  # Both checks are idempotent. The .zshrc check runs every boot (cheap
-  # stat-check; only writes if missing). The clone is marker-gated so it
-  # runs once per host's lifetime.
-  systemd.services.schwim-staging = {
-    description = "Pre-stage schwim's home: default .zshrc + fleet repos";
-    wantedBy    = [ "multi-user.target" ];
-    after       = [ "network-online.target" ];
-    wants       = [ "network-online.target" ];
-    serviceConfig = {
-      Type            = "oneshot";
-      User            = "schwim";
-      Group           = "users";
-      RemainAfterExit = true;
-    };
-    script = ''
-      set -eu
-
-      # 1. Default .zshrc — matches what `zsh-newuser-install` option 2
-      #    would create. With this in place the interactive prompt
-      #    doesn't fire on first login.
-      if [ ! -e "$HOME/.zshrc" ]; then
-        cat > "$HOME/.zshrc" <<'ZSHRC'
-# Lines configured by zsh-newuser-install
-HISTFILE=~/.histfile
-HISTSIZE=1000
-SAVEHIST=1000
-bindkey -e
-# End of lines configured by zsh-newuser-install
-# The following lines were added by compinstall
-zstyle :compinstall filename '~/.zshrc'
-
-autoload -Uz compinit
-compinit
-# End of lines added by compinstall
-ZSHRC
-      fi
-
-      # 2. Fleet repos. Marker-gated so we don't re-clone on every boot.
-      SRC_DIR="$HOME/src"
-      DONE_MARKER="$HOME/.cache/nixos-configs/staging-done"
-      if [ ! -e "$DONE_MARKER" ]; then
-        mkdir -p "$SRC_DIR" "$(dirname "$DONE_MARKER")"
-        for repo in nix-home-manager nixos-configs; do
-          [ -d "$SRC_DIR/$repo" ] && continue
-          ${pkgs.git}/bin/git -C "$SRC_DIR" clone \
-            "https://github.com/gschwim/$repo.git"
-        done
-        touch "$DONE_MARKER"
-      fi
-    '';
-  };
-
-  # First-login hint, self-clearing. Prints on login shells (not on every
-  # subshell open) while the user hasn't yet run `home-manager switch` —
-  # detected by the absence of the HM profile marker. Once HM has been
-  # set up, the marker exists and the message stops appearing. No /etc/motd
-  # to clean up manually.
-  programs.zsh.loginShellInit = ''
-    if [ "$USER" = "schwim" ] && [ ! -e "$HOME/.local/state/nix/profiles/home-manager" ]; then
-      cat <<'MSG'
-
-    ── First-time setup ─────────────────────────────────
-      Stage your home environment:
-        cd ~/src/nix-home-manager && home-manager switch
-
-      Repos in ~/src are cloned via HTTPS. For SSH push:
-        git -C ~/src/<repo> remote set-url origin \
-          git@github.com:gschwim/<repo>.git
-    ─────────────────────────────────────────────────────
-
-    MSG
-    fi
-  '';
+  # systemd-tmpfiles `C` copies the source if /home/schwim/.zshrc doesn't
+  # exist. It never replaces an existing file, so an HM-managed .zshrc
+  # or anything the user wrote by hand is left alone.
+  environment.etc."nixos-configs/schwim-zshrc.zsh".source = ./schwim-zshrc.zsh;
+  systemd.tmpfiles.rules = [
+    "C /home/schwim/.zshrc 0644 schwim users - /etc/nixos-configs/schwim-zshrc.zsh"
+  ];
 
   environment.systemPackages = with pkgs; [
     neovim
