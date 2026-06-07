@@ -131,6 +131,54 @@ else
     || die "failed to import public attachment"
 fi
 
+# 2b) Pull or sign the host certificate.
+# Cert lives as a third attachment on the host's keepassxc entry. If absent,
+# we pull the CA private key from "SSH CA/SSH Host CA" (attachment host_ca),
+# sign, push the cert back, and shred the CA copy from disk. Re-runs that
+# find the cert attachment just pull it — idempotent.
+
+# The key block above only sets a temp-file trap inside its pull branch;
+# clear any residual trap before our own setup. tmp_priv/tmp_pub were
+# install(1)-copied to $KEY earlier, so the source temps are now orphaned —
+# rm them explicitly (no-op if they don't exist).
+rm -f "${tmp_priv:-}" "${tmp_pub:-}"
+trap - EXIT
+
+CERT="${KEY}-cert.pub"
+
+if kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+       ssh_host_ed25519_key-cert.pub "$CERT" 2>/dev/null; then
+  chmod 644 "$CERT"
+  echo "Pulled cert from $KDBX_ENTRY → $CERT"
+else
+  echo "No cert on $KDBX_ENTRY — signing host pubkey with CA"
+  tmp_ca="$(mktemp)"
+  chmod 600 "$tmp_ca"
+  trap 'rm -f "$tmp_ca"' EXIT INT TERM
+
+  kpx attachment-export --quiet "$KDBX_FILE" "SSH CA/SSH Host CA" \
+      host_ca "$tmp_ca" >/dev/null \
+    || die "couldn't export 'host_ca' attachment from 'SSH CA/SSH Host CA'"
+
+  # -h: this is a HOST certificate (not a user cert).
+  # -I: cert identity (a label, useful in logs / `ssh-keygen -L`).
+  # -n: principals — the hostnames/IPs the cert is valid for.
+  # -V always:forever: never expires (OpenSSH 8.2+).
+  ssh-keygen -s "$tmp_ca" -h -I "$HOSTNAME" -n "$HOSTNAME" \
+             -V "always:forever" "${KEY}.pub" >/dev/null \
+    || die "ssh-keygen cert signing failed"
+
+  # CA private off disk ASAP. The trap is belt-and-suspenders for any abort
+  # between here and rm.
+  rm -f "$tmp_ca"
+  trap - EXIT INT TERM
+
+  echo "Pushing $CERT to keepassxc as attachment on $KDBX_ENTRY"
+  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+      ssh_host_ed25519_key-cert.pub "$CERT" >/dev/null \
+    || die "failed to import cert attachment"
+fi
+
 # 3) Reconcile with secrets/secrets.nix.
 # Compare only the key type + data, not the comment field (those differ
 # between the ssh-keygen comment and whatever's pasted into secrets.nix).
@@ -167,3 +215,6 @@ fi
 echo
 echo "Public key:"
 cat "${KEY}.pub"
+echo
+echo "Certificate (ssh-keygen -L):"
+ssh-keygen -L -f "$CERT" | sed -E 's/^/  /'

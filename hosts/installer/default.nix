@@ -44,6 +44,10 @@ in {
     KbdInteractiveAuthentication = lib.mkForce false;
   };
 
+  # Installer is ephemeral — no signed host cert is ever staged into /etc/ssh/.
+  # Opt out so sshd doesn't try to load a nonexistent HostCertificate file.
+  my.services.openssh.useHostCertificate = false;
+
   # Authorize blushda's ed25519 key for both schwim and root.
   # - schwim:  what install-host.sh uses for its preflight (sudo for the
   #            handful of root operations).

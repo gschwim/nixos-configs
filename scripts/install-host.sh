@@ -112,8 +112,15 @@ read -rp "Continue? (y/N) " ans
 
 rm -rf "$STAGING"
 mkdir -p "$STAGING/etc/ssh"
-install -m 600 "$HOST_KEY"      "$STAGING/etc/ssh/ssh_host_ed25519_key"
+install -m 600 "$HOST_KEY"       "$STAGING/etc/ssh/ssh_host_ed25519_key"
 install -m 644 "${HOST_KEY}.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key.pub"
+
+# Host certificate: gen-host-key.sh always produces this. If it's missing
+# we'd silently install a host that fails sshd startup (HostCertificate
+# points at a nonexistent file). Hard-fail here so the error is obvious.
+[ -f "${HOST_KEY}-cert.pub" ] \
+  || { echo "ERROR: missing cert at ${HOST_KEY}-cert.pub — did gen-host-key.sh complete?" >&2; exit 2; }
+install -m 644 "${HOST_KEY}-cert.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key-cert.pub"
 
 # ----- prep installer's hostid ---------------------------------------------
 

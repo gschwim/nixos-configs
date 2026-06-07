@@ -22,6 +22,57 @@ One-time setup on the authoring machine (the Mac you edit this repo from, referr
 - **`keepassxc-cli` ≥ 2.7.7** on PATH. macOS: `brew install keepassxc`. 2.7.6 has an attachment-import bug that silently drops the second back-to-back import (see [scripts/gen-host-key.sh:15-17](scripts/gen-host-key.sh#L15-L17)) — verify with `keepassxc-cli --version`.
 - **A KeepassXC database** holding (or about to hold) the per-host SSH host keys. `scripts/gen-host-key.sh` reads/writes entries under `ssh-host-keys/<hostname>`. Point at it with `export KDBX_FILE=<path-to-kdbx>` in your shell (or accept the script's hardcoded default and adjust it locally). Set `KDBX_PW` to skip the per-invocation password prompt.
 - **A Linux build environment** for building the custom installer ISO. Mac alone cannot build x86_64-linux closures. Options: an existing NixOS host (e.g. `pleiades` once it's up), a configured remote builder in `/etc/nix/machines`, or `nix.linux-builder.enable = true` under nix-darwin.
+- **SSH host certificate trust** installed once on the workstation. Hosts present a CA-signed certificate (the CA lives in the kdbx at `SSH CA/SSH Host CA`), and the workstation needs the CA pubkey installed as `@cert-authority` in `~/.ssh/known_hosts` so it accepts those certs without per-host fingerprint prompts. Run once:
+
+  ```
+  scripts/trust-ssh-ca.sh
+  ```
+
+  Idempotent — re-runs detect the existing line and exit. See "SSH host certificates" below for what this gets you.
+
+## SSH host certificates
+
+Every host built through this repo is given an ed25519 host key whose pubkey is signed by an SSH Certificate Authority (the CA lives in the kdbx at `SSH CA/SSH Host CA`). `scripts/gen-host-key.sh` does the signing automatically as part of provisioning a new host's identity — the signed cert lives in the kdbx alongside the host's key, gets staged at install time, and ends up at `/etc/ssh/ssh_host_ed25519_key-cert.pub` on the installed system. sshd presents it via `HostCertificate` (see [modules/services/openssh.nix](modules/services/openssh.nix)), and any workstation that has the CA installed (Prerequisites step above) trusts the host without fingerprint prompts — across re-installs, across cert principals being extended, forever.
+
+Validity is set to `always:forever`. Rotating the CA would mean re-signing every host (just re-run `gen-host-key.sh <host>` — it detects a missing cert and re-signs); the workstation `@cert-authority` line then needs to be updated by hand. Not expected to happen soon.
+
+To inspect a host's cert locally after `gen-host-key.sh` has run:
+
+```
+ssh-keygen -L -f ~/.local/share/nixos-configs/host-keys/<host>_ed25519-cert.pub
+```
+
+To verify a remote host is presenting the cert correctly:
+
+```
+ssh -v schwim@<host> 2>&1 | grep -i 'cert\|host key'
+# expect: "Server host certificate: ssh-ed25519-cert-v01@openssh.com ..."
+# expect: "Host '<host>' is known and matches the ED25519-CERT host certificate."
+```
+
+The installer ISO does **not** get a cert — installers are ephemeral and rebooting regenerates host keys anyway. `install-host.sh` connects to the installer with `StrictHostKeyChecking=no` to deal with that.
+
+### Applying certs to already-installed hosts (no re-install)
+
+If a host was installed before this workflow landed (or before its keepassxc entry got a cert), copy the cert in and roll a rebuild:
+
+```bash
+# On the workstation: produce the cert if it doesn't exist yet.
+scripts/gen-host-key.sh <host>
+
+# Push it onto the host.
+scp ~/.local/share/nixos-configs/host-keys/<host>_ed25519-cert.pub \
+    schwim@<host>:/tmp/
+ssh schwim@<host> \
+    sudo install -m 644 /tmp/<host>_ed25519-cert.pub \
+                        /etc/ssh/ssh_host_ed25519_key-cert.pub
+
+# Roll forward. With my.services.openssh.useHostCertificate defaulting on,
+# the rebuild adds HostCertificate to sshd_config and restarts sshd.
+ssh schwim@<host> 'cd nixos-configs && git pull && sudo nixos-rebuild switch --flake .#<host>'
+```
+
+After that, blushda's SSH client sees the cert and trusts it via the `@cert-authority` line installed by `trust-ssh-ca.sh`.
 
 ## Adding a new host
 
