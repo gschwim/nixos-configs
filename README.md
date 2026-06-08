@@ -74,6 +74,62 @@ ssh schwim@<host> 'cd nixos-configs && git pull && sudo nixos-rebuild switch --f
 
 After that, blushda's SSH client sees the cert and trusts it via the `@cert-authority` line installed by `trust-ssh-ca.sh`.
 
+## SSH user certificates
+
+Mirror of the host-cert mechanism: each fleet host trusts a single SSH **User CA** (lives in the kdbx at `SSH CA/SSH User CA`). Users that need to SSH between hosts present a CA-signed cert; receiving hosts accept it without any `authorized_keys` entry. Onboarding a new admin or workstation = sign one key; no host-side changes, no fleet rebuild.
+
+The User CA's public key is committed at [lib/user-ca.pub](lib/user-ca.pub). [modules/services/openssh.nix](modules/services/openssh.nix) places it at `/etc/ssh/user_ca.pub` and sets `services.openssh.settings.TrustedUserCAKeys` on every host (default on; `my.services.openssh.trustUserCA = false;` opts out).
+
+### Management hosts
+
+A "management host" needs to SSH *out* to other fleet hosts. Flag in the per-host file:
+
+```nix
+my.host.management.enable = true;
+# my.host.management.users = [ "schwim" ];  # default; only override to add others
+```
+
+The flag's only NixOS-side effect is a `systemd-tmpfiles` rule ensuring `/home/<u>/.ssh/` exists at mode 0700 owned by `<u>:users`. The actual keypair + cert are delivered via the install scripts, not NixOS modules.
+
+### Provisioning a management host's user keys
+
+```bash
+# 1. Generate (or reuse) the keypair and sign the cert.
+#    Stored only in the local cache at
+#    ~/.local/share/nixos-configs/user-keys/<host>_<user>_ed25519{,.pub,-cert.pub}
+#    Nothing is committed to the repo or pushed to keepassxc.
+scripts/gen-user-key.sh <host> [user] [principals]
+
+# 2a. Fresh install (the install script picks up management.enable and
+#     stages the three files via nixos-anywhere --extra-files):
+scripts/install-host.sh <host> <ip>
+
+# 2b. Already-installed host (scp + install into ~/.ssh/, idempotent):
+scripts/deploy-user-key.sh <host> [user]
+```
+
+After deployment, on the management host:
+
+```bash
+ssh-keygen -L -f ~/.ssh/id_ed25519-cert.pub   # confirm signed by User CA, principal = schwim
+ssh schwim@<other-host>                       # should succeed via cert; no password prompt
+```
+
+### Existing host turning into a management host
+
+```bash
+# 1. Edit hosts/<host>/default.nix → my.host.management.enable = true;
+# 2. Commit + push.
+# 3. On <host>: git pull && sudo nixos-rebuild switch (picks up the tmpfiles rule).
+# 4. On blushda:
+scripts/gen-user-key.sh <host>
+scripts/deploy-user-key.sh <host>
+```
+
+### lib/admin-keys.nix is still in play
+
+The `lib/admin-keys.nix` fallback (raw pubkeys in `authorized_keys`) remains active. Recovery path if user-cert auth ever silently breaks. Retire it once cert auth is proven in daily use across all hosts.
+
 ## Adding a new host
 
 End state of this section: a host directory exists, the host is registered in the flake, its ed25519 SSH host key is in KeepassXC and authorised in `secrets/secrets.nix`, and every agenix secret it needs decrypts to it. After this, jump to either "Installing with the USB installer" or "Manual install".

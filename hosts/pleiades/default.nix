@@ -15,6 +15,7 @@
   # Acting as a 24/7 server (incus host), even though the hardware is a
   # laptop. Drives preventSleep on by default and any future server defaults.
   my.host.role = "server";
+  my.host.management.enable = true;          # pleiades runs the fleet incus cluster
 
   my.disko = {
     enable   = true;

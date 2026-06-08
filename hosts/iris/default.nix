@@ -7,6 +7,7 @@
   time.timeZone       = "America/Phoenix";
 
   my.host.role = "server";
+  my.host.management.enable = true;          # iris needs outbound SSH to other hosts
 
   my.disko = {
     enable   = true;
@@ -17,7 +18,7 @@
   my.network.static = {
     enable       = true;
     interface    = "enp3s0";                   # confirm at install
-    address      = "172.16.1.250";           # placeholder — choose real value
+    address      = "172.16.1.248";           # placeholder — choose real value
     prefixLength = 24;
     gateway      = "172.16.1.254";
     nameservers  = [ "172.16.1.253" ];

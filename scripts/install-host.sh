@@ -74,6 +74,22 @@ case "$HOSTID" in
   *) echo "ERROR: could not parse 8-hex hostId from $HOST_DIR/default.nix (got: '$HOSTID')" >&2; exit 2 ;;
 esac
 
+# Read management flag + users list from the flake config. Empty MGMT_USERS
+# means "not a management host" (regardless of whether the flag literally
+# evaluates false or this host doesn't set it).
+MGMT_ENABLE="$(nix --extra-experimental-features 'nix-command flakes' \
+  eval --raw "$REPO_ROOT#nixosConfigurations.$HOSTNAME.config.my.host.management.enable" \
+  --apply 'b: if b then "1" else "0"' 2>/dev/null || echo 0)"
+
+MGMT_USERS=""
+if [ "$MGMT_ENABLE" = "1" ]; then
+  MGMT_USERS="$(nix --extra-experimental-features 'nix-command flakes' \
+    eval --raw "$REPO_ROOT#nixosConfigurations.$HOSTNAME.config.my.host.management.users" \
+    --apply 'l: builtins.concatStringsSep " " l')"
+fi
+
+USER_KEY_CACHE="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/user-keys"
+
 # Confirm secrets.nix recipient list is set up.
 if grep -q "REPLACE_WITH_${HOSTNAME_UPPER}_HOST_PUBKEY" "$REPO_ROOT/secrets/secrets.nix" 2>/dev/null; then
   echo "WARNING: $REPO_ROOT/secrets/secrets.nix still contains a placeholder for $HOSTNAME."
@@ -121,6 +137,28 @@ install -m 644 "${HOST_KEY}.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key.pub"
 [ -f "${HOST_KEY}-cert.pub" ] \
   || { echo "ERROR: missing cert at ${HOST_KEY}-cert.pub — did gen-host-key.sh complete?" >&2; exit 2; }
 install -m 644 "${HOST_KEY}-cert.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key-cert.pub"
+
+# User keys + certs for management hosts. Stage one set per listed user.
+# Preflight: every cached file must exist; missing files are a hard fail
+# because the host config has my.host.management.enable = true and would
+# otherwise come up without an outbound-cert flow.
+if [ -n "$MGMT_USERS" ]; then
+  for u in $MGMT_USERS; do
+    slot="${HOSTNAME}_${u}"
+    upriv="$USER_KEY_CACHE/${slot}_ed25519"
+    upub="${upriv}.pub"
+    ucert="${upriv}-cert.pub"
+    for f in "$upriv" "$upub" "$ucert"; do
+      [ -f "$f" ] \
+        || { echo "ERROR: missing $f — run scripts/gen-user-key.sh $HOSTNAME $u" >&2; exit 2; }
+    done
+    mkdir -p "$STAGING/home/$u/.ssh"
+    install -m 600 "$upriv" "$STAGING/home/$u/.ssh/id_ed25519"
+    install -m 644 "$upub"  "$STAGING/home/$u/.ssh/id_ed25519.pub"
+    install -m 644 "$ucert" "$STAGING/home/$u/.ssh/id_ed25519-cert.pub"
+  done
+  echo "Staged user keys+certs for: $MGMT_USERS"
+fi
 
 # ----- prep installer's hostid ---------------------------------------------
 

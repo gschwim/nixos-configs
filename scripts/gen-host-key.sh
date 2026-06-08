@@ -161,10 +161,16 @@ else
     || die "couldn't export 'host_ca' attachment from 'SSH CA/SSH Host CA'"
 
   # -h: this is a HOST certificate (not a user cert).
-  # -I: cert identity (a label, useful in logs / `ssh-keygen -L`).
-  # -n: principals — the hostnames/IPs the cert is valid for.
+  # -I: cert identity — a label shown by `ssh-keygen -L` and in sshd logs,
+  #     no role in validation.
   # -V always:forever: never expires (OpenSSH 8.2+).
-  ssh-keygen -s "$tmp_ca" -h -I "$HOSTNAME" -n "$HOSTNAME" \
+  # No -n principals. Empty principal list means the cert is valid for any
+  # host the @cert-authority pattern in known_hosts trusts. We need this
+  # because principals would otherwise have to include every hostname / IP
+  # a client might reach the host on (LAN, VPN, DHCP-assigned IP, etc.),
+  # which is unworkable. The trust boundary is "signed by our CA"; see the
+  # README "SSH host certificates" section for the rationale.
+  ssh-keygen -s "$tmp_ca" -h -I "$HOSTNAME" \
              -V "always:forever" "${KEY}.pub" >/dev/null \
     || die "ssh-keygen cert signing failed"
 
