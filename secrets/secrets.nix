@@ -106,7 +106,7 @@ let
   # scripts/gen-host-key.sh which inserts/replaces these in place.
   blushda = "age1gumg838j0s9fpmly4umss05e994dh7zgq6j94fyx8tel9v6nqansn8aq9p";
 
-  pleiades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoCf/2e719Y8SzpIc4clVYtde8HEeq+3oLIbtkWDkJ2";
+  pleiades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOAbeS76G7cLvoJoZuR26X25gqEF24vnDgadtGf2Fisg";
   iris = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILRcZcUlVW7MrL/SojLy247C0IHvi1f7RrS/ZCpfvoR8";
 
   # ---- Access lists --------------------------------------------------------

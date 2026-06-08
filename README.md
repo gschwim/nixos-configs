@@ -74,6 +74,26 @@ ssh schwim@<host> 'cd nixos-configs && git pull && sudo nixos-rebuild switch --f
 
 After that, blushda's SSH client sees the cert and trusts it via the `@cert-authority` line installed by `trust-ssh-ca.sh`.
 
+### Trusting the Host CA on every fleet host (client-side)
+
+For SSH **between** fleet hosts (e.g. pleiades → iris) to work cert-only — no TOFU prompts, no per-host `known_hosts` editing — each NixOS host's SSH **client** needs an `@cert-authority` entry for the Host CA, mirroring what `trust-ssh-ca.sh` does for blushda.
+
+This is wired declaratively via `my.services.openssh.trustHostCA` (default `true`). The openssh module materializes a `programs.ssh.knownHosts.host-ca` entry with `certAuthority = true`, which NixOS writes into `/etc/ssh/ssh_known_hosts` as `@cert-authority * <Host-CA-pubkey>`. Fleet-wide, every user on the host.
+
+The CA pubkey is committed to the repo at [lib/host-ca.pub](lib/host-ca.pub), exported one-time from kdbx with:
+
+```bash
+printf '%s\n' "$KDBX_PW" | keepassxc-cli attachment-export --quiet \
+    "$KDBX_FILE" "SSH CA/SSH Host CA" host_ca.pub /dev/stdout > lib/host-ca.pub
+```
+
+Verify on a running host:
+
+```bash
+ssh schwim@<host> 'grep ^@cert-authority /etc/ssh/ssh_known_hosts'
+# expect: @cert-authority * ssh-ed25519 AAAA…
+```
+
 ## SSH user certificates
 
 Mirror of the host-cert mechanism: each fleet host trusts a single SSH **User CA** (lives in the kdbx at `SSH CA/SSH User CA`). Users that need to SSH between hosts present a CA-signed cert; receiving hosts accept it without any `authorized_keys` entry. Onboarding a new admin or workstation = sign one key; no host-side changes, no fleet rebuild.
