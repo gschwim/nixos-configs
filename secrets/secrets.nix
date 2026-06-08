@@ -128,6 +128,21 @@ let
   # below is just `= <name>Access;`. Reading the variable definition
   # answers "who can decrypt this secret?" in one place.
   wifiAccess = allAccess ++ realKeys [ iris ];
+
+  # User-cert access lists. Each user-cert secret is encrypted ONLY to the
+  # one host that should decrypt it — pleiades's user cert is only for
+  # pleiades, not for the wider fleet. Editor workstations are NOT included
+  # because we never need to edit a user-cert secret in place; we just
+  # regenerate via scripts/provision-user-key.sh, which writes a fresh
+  # encrypted blob.
+  pleiadesUserAccess = realKeys [ pleiades ];
+  irisUserAccess     = realKeys [ iris ];
 in {
   "wifi-secrets.age".publicKeys = wifiAccess;
+
+  # Per-host, per-user keypair secrets. Each is encrypted only to the
+  # corresponding host so that host (and only that host) can decrypt the
+  # priv key during nixos-rebuild activation.
+  "users/pleiades_schwim_id_ed25519.age".publicKeys = pleiadesUserAccess;
+  "users/iris_schwim_id_ed25519.age".publicKeys     = irisUserAccess;
 }

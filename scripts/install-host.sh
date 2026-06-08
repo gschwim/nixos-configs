@@ -88,8 +88,6 @@ if [ "$MGMT_ENABLE" = "1" ]; then
     --apply 'l: builtins.concatStringsSep " " l')"
 fi
 
-USER_KEY_CACHE="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/user-keys"
-
 # Confirm secrets.nix recipient list is set up.
 if grep -q "REPLACE_WITH_${HOSTNAME_UPPER}_HOST_PUBKEY" "$REPO_ROOT/secrets/secrets.nix" 2>/dev/null; then
   echo "WARNING: $REPO_ROOT/secrets/secrets.nix still contains a placeholder for $HOSTNAME."
@@ -138,26 +136,25 @@ install -m 644 "${HOST_KEY}.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key.pub"
   || { echo "ERROR: missing cert at ${HOST_KEY}-cert.pub — did gen-host-key.sh complete?" >&2; exit 2; }
 install -m 644 "${HOST_KEY}-cert.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key-cert.pub"
 
-# User keys + certs for management hosts. Stage one set per listed user.
-# Preflight: every cached file must exist; missing files are a hard fail
-# because the host config has my.host.management.enable = true and would
-# otherwise come up without an outbound-cert flow.
+# User keys + certs for management hosts: nothing to stage here. The
+# encrypted priv lives in secrets/users/<host>_<u>_id_ed25519.age and gets
+# decrypted by agenix on first activation (using the host SSH key staged
+# above as the decryption identity). The cert + pub are placed by tmpfiles
+# from the in-store paths in lib/users/. So install-host.sh just verifies
+# that every required artifact is present in the repo — if not, the
+# install would fail at first activation, so fail-fast here.
 if [ -n "$MGMT_USERS" ]; then
   for u in $MGMT_USERS; do
     slot="${HOSTNAME}_${u}"
-    upriv="$USER_KEY_CACHE/${slot}_ed25519"
-    upub="${upriv}.pub"
-    ucert="${upriv}-cert.pub"
-    for f in "$upriv" "$upub" "$ucert"; do
+    age_f="$REPO_ROOT/secrets/users/${slot}_id_ed25519.age"
+    pub_f="$REPO_ROOT/lib/users/${slot}_id_ed25519.pub"
+    cert_f="$REPO_ROOT/lib/users/${slot}_id_ed25519-cert.pub"
+    for f in "$age_f" "$pub_f" "$cert_f"; do
       [ -f "$f" ] \
-        || { echo "ERROR: missing $f — run scripts/gen-user-key.sh $HOSTNAME $u" >&2; exit 2; }
+        || { echo "ERROR: missing $f — run scripts/provision-user-key.sh $HOSTNAME $u" >&2; exit 2; }
     done
-    mkdir -p "$STAGING/home/$u/.ssh"
-    install -m 600 "$upriv" "$STAGING/home/$u/.ssh/id_ed25519"
-    install -m 644 "$upub"  "$STAGING/home/$u/.ssh/id_ed25519.pub"
-    install -m 644 "$ucert" "$STAGING/home/$u/.ssh/id_ed25519-cert.pub"
   done
-  echo "Staged user keys+certs for: $MGMT_USERS"
+  echo "User-cert artifacts verified for: $MGMT_USERS"
 fi
 
 # ----- prep installer's hostid ---------------------------------------------

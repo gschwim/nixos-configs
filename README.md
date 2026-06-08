@@ -93,37 +93,61 @@ The flag's only NixOS-side effect is a `systemd-tmpfiles` rule ensuring `/home/<
 
 ### Provisioning a management host's user keys
 
+The whole flow is agenix-backed: the priv key lives encrypted in `secrets/users/`, the pub + cert live plaintext in `lib/users/`, and `nixos-rebuild switch` on the host decrypts + places everything. **Nothing unencrypted persists on blushda.**
+
 ```bash
-# 1. Generate (or reuse) the keypair and sign the cert.
-#    Stored only in the local cache at
-#    ~/.local/share/nixos-configs/user-keys/<host>_<user>_ed25519{,.pub,-cert.pub}
-#    Nothing is committed to the repo or pushed to keepassxc.
-scripts/gen-user-key.sh <host> [user] [principals]
+# 1. On blushda: produce three artifacts in the repo.
+scripts/provision-user-key.sh <host> [user] [principals]
+#    → secrets/users/<host>_<user>_id_ed25519.age          encrypted priv
+#    → lib/users/<host>_<user>_id_ed25519.pub              plaintext pubkey
+#    → lib/users/<host>_<user>_id_ed25519-cert.pub         plaintext cert
+#
+#    Defaults: user = principals = schwim.
+#    Idempotent: re-runs when artifacts already exist are no-ops.
+#    Rotate: delete the three files and re-run.
+#
+#    Precondition: secrets/secrets.nix must already declare
+#    "users/<host>_<user>_id_ed25519.age".publicKeys = <host>UserAccess;
+#    (the script bails with a clear error if not).
 
-# 2a. Fresh install (the install script picks up management.enable and
-#     stages the three files via nixos-anywhere --extra-files):
-scripts/install-host.sh <host> <ip>
+# 2. Commit + push.
+git add -A && git commit -m "<host>: provision <user> user cert" && git push
 
-# 2b. Already-installed host (scp + install into ~/.ssh/, idempotent):
-scripts/deploy-user-key.sh <host> [user]
+# 3. On the management host: pull + rebuild. agenix decrypts on activation
+#    and places id_ed25519 (mode 600, owned by <user>) at ~/.ssh/.
+#    tmpfiles copies pub + cert next to it.
+ssh schwim@<host> 'cd nixos-configs && git pull && sudo nixos-rebuild switch --flake .#<host>'
 ```
 
-After deployment, on the management host:
+After the rebuild, on the management host:
 
 ```bash
-ssh-keygen -L -f ~/.ssh/id_ed25519-cert.pub   # confirm signed by User CA, principal = schwim
-ssh schwim@<other-host>                       # should succeed via cert; no password prompt
+ls -l ~/.ssh/                                  # id_ed25519 / .pub / -cert.pub all present
+ssh-keygen -L -f ~/.ssh/id_ed25519-cert.pub    # signed by User CA, principal = schwim
+ssh schwim@<other-host>                        # succeeds via cert, no password prompt
+```
+
+### Fresh installs
+
+`install-host.sh` reads the host's `my.host.management.users` list and **verifies** that all the artifacts exist in the repo before starting an install (so you can't accidentally install a management host whose user keys haven't been provisioned). It doesn't stage anything itself — the agenix module on the new host handles decryption and placement on first activation. Workflow:
+
+```bash
+# On blushda:
+scripts/provision-user-key.sh <host>           # once per user, before install
+git add -A && git commit && git push
+scripts/install-host.sh <host> <ip>            # verifies artifacts, then runs nixos-anywhere
 ```
 
 ### Existing host turning into a management host
 
 ```bash
 # 1. Edit hosts/<host>/default.nix → my.host.management.enable = true;
-# 2. Commit + push.
-# 3. On <host>: git pull && sudo nixos-rebuild switch (picks up the tmpfiles rule).
-# 4. On blushda:
-scripts/gen-user-key.sh <host>
-scripts/deploy-user-key.sh <host>
+#    (Default users = [ "schwim" ]; add others to the list if needed.)
+# 2. On blushda:
+scripts/provision-user-key.sh <host>
+git add -A && git commit && git push
+# 3. On <host>:
+git pull && sudo nixos-rebuild switch --flake .#<host>
 ```
 
 ### lib/admin-keys.nix is still in play
@@ -476,6 +500,14 @@ cd /path/to/nixos-configs/secrets
 nix --extra-experimental-features 'nix-command flakes' \
     run github:ryantm/agenix -- -i ~/.config/sops/age/keys.txt -e <name>.age
 ```
+
+## TODOs / Followups
+
+- **Proper user management.** Right now `schwim` is the only multi-host user, defined fleet-wide in `modules/base/default.nix`, with HM config at `home/schwim.nix`. Adding a second user (e.g. `alice`) opens a lot of questions we haven't answered: where does `users.users.alice` live (per-host inline vs `users/alice.nix` factored out)? How does `modules/home-manager.nix` discover per-user HM configs without hardcoding each one? Does alice get fleet-wide or per-host accounts? How do we generalize `lib/admin-keys.nix` (currently a single list) into per-user / per-role grants? When this becomes a real need, plan it deliberately — this scaffold isn't ready for multi-user.
+
+- **Retiring `lib/admin-keys.nix`.** Once user-cert auth is proven across all hosts for a couple of weeks, drop the raw-pubkey fallback. See ["SSH user certificates"](#ssh-user-certificates) → "lib/admin-keys.nix is still in play".
+
+- **CA rotation procedure (host + user).** Untouched. Plan when it becomes a real concern.
 
 ## Gotchas
 

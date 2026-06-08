@@ -4,6 +4,9 @@
 # Currently wired up:
 #   - modules/power/prevent-sleep.nix
 #       my.power.preventSleep.enable defaults to (role == "server")
+#   - my.host.management (this file's config block)
+#       declares the host as a "management host," wires agenix decryption
+#       and placement of each user's CA-signed keypair + cert.
 #
 # Future candidates (review when adding/changing a host or when one of these
 # starts feeling tedious to set per-host):
@@ -18,9 +21,20 @@
 #
 # Add new candidates here as they come up; promote to actual defaults when
 # you find yourself setting the same value on every host of a given role.
+
 { config, lib, ... }:
 let
   mgmt = config.my.host.management;
+  hostName = config.networking.hostName;
+
+  # Per-user file paths in the repo. The .age priv-key file is required for
+  # the build to succeed — eval will fail with a clear "path does not exist"
+  # if a user is in mgmt.users but hasn't been provisioned yet via
+  # scripts/provision-user-key.sh.
+  slot = u: "${hostName}_${u}_id_ed25519";
+  ageFile = u: ../secrets/users + "/${slot u}.age";
+  pubFile = u: ../lib/users + "/${slot u}.pub";
+  certFile = u: ../lib/users + "/${slot u}-cert.pub";
 in {
   options.my.host = {
     role = lib.mkOption {
@@ -41,44 +55,75 @@ in {
     };
 
     management = {
-      enable = lib.mkEnableOption "management host (gets a CA-signed user keypair staged into ~/.ssh/)";
+      enable = lib.mkEnableOption "management host (deploys a CA-signed user keypair to listed users)";
 
       users = lib.mkOption {
         type        = lib.types.listOf lib.types.str;
         default     = [ "schwim" ];
         description = ''
-          Users on this host that should have id_ed25519, id_ed25519.pub,
-          and id_ed25519-cert.pub staged into their ~/.ssh/. Each user
-          must already exist on the host (this module doesn't create them).
+          Users on this host that should have a CA-signed SSH keypair
+          deployed to their ~/.ssh/. Each user must already exist on the
+          host (this module doesn't create them).
 
-          scripts/install-host.sh (fresh installs) and scripts/deploy-user-key.sh
-          (running hosts) consult this list via `nix eval` to decide what
-          to stage. NixOS-side, the only effect is ensuring /home/<u>/.ssh/
-          exists with mode 0700 so install-staged files land in a
-          properly-permissioned directory.
+          For each listed user, three artifacts must exist in the repo —
+          produced by scripts/provision-user-key.sh:
 
-          The keypair + cert are NOT managed by NixOS at runtime — they're
-          delivered once (at install or via deploy-user-key.sh) and then
-          sit at /home/<u>/.ssh/. OpenSSH client auto-discovers *-cert.pub
-          next to the key; receiving hosts trust the User CA via
-          my.services.openssh.trustUserCA.
+            secrets/users/<host>_<user>_id_ed25519.age      encrypted priv
+                                                            (recipient = the
+                                                            host's SSH host key)
+            lib/users/<host>_<user>_id_ed25519.pub          pubkey
+            lib/users/<host>_<user>_id_ed25519-cert.pub     signed cert
+
+          Missing artifacts cause nix flake check to fail with a "path does
+          not exist" error pointing at the missing file — the user fixes
+          by running scripts/provision-user-key.sh <host> <user>.
+
+          On the host, on every nixos-rebuild:
+            - agenix decrypts the .age file and places id_ed25519 at the
+              right path (mode 600, owned by <user>).
+            - tmpfiles places id_ed25519.pub and id_ed25519-cert.pub next
+              to it (mode 644, owned by <user>).
+            - The user can immediately SSH out — receiving hosts trust the
+              User CA via my.services.openssh.trustUserCA.
         '';
       };
     };
   };
 
   config = lib.mkIf mgmt.enable {
-    # Two rules per user:
-    #   d — create /home/<u>/.ssh at 0700 owned by <u>:users if it doesn't
-    #       exist; if it does (because install-host.sh's --extra-files
-    #       staged files into it before user activation), adjust owner+mode.
-    #   Z — recursively chown the contents (the staged keys arrive as
-    #       root:root from --extra-files). Mode '-' = leave file modes
-    #       alone, preserving the 600 that install-host.sh set on the
-    #       private key.
+    # ~/.ssh perms. The 'd' rule ensures the directory exists at 0700
+    # owned by the user, and is also evaluated against an existing dir —
+    # so if anything's wrong it gets corrected. (Z would recursively chown
+    # contents too, but agenix already owns the priv it lays down and
+    # tmpfiles handles the pub/cert below.)
     systemd.tmpfiles.rules = lib.concatMap (u: [
       "d /home/${u}/.ssh 0700 ${u} users -"
-      "Z /home/${u}/.ssh - ${u} users -"
+      # Force-copy pub + cert from /etc/ssh/users/ into the user's ~/.ssh/.
+      # 'C+' = force copy (overwrite if exists); files end up real, not
+      # symlinks (some SSH clients like real files better in $HOME).
+      "C+ /home/${u}/.ssh/id_ed25519.pub 0644 ${u} users - /etc/ssh/users/${slot u}.pub"
+      "C+ /home/${u}/.ssh/id_ed25519-cert.pub 0644 ${u} users - /etc/ssh/users/${slot u}-cert.pub"
     ]) mgmt.users;
+
+    # Stage the pub + cert (public artifacts) at /etc/ssh/users/. The
+    # tmpfiles rules above copy them from here into each user's ~/.ssh/.
+    environment.etc = lib.listToAttrs (lib.concatMap (u: [
+      { name = "ssh/users/${slot u}.pub";       value.source = pubFile u; }
+      { name = "ssh/users/${slot u}-cert.pub";  value.source = certFile u; }
+    ]) mgmt.users);
+
+    # agenix decrypts the priv key on every activation. `path` puts the
+    # decrypted file directly at /home/<u>/.ssh/id_ed25519 (as a symlink
+    # to /run/agenix/<name>, which is fine — sshd/ssh follow symlinks).
+    age.secrets = lib.listToAttrs (map (u: {
+      name = "user-key-${hostName}-${u}";
+      value = {
+        file  = ageFile u;
+        path  = "/home/${u}/.ssh/id_ed25519";
+        owner = u;
+        group = "users";
+        mode  = "0600";
+      };
+    }) mgmt.users);
   };
 }
