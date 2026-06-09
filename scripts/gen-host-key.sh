@@ -323,17 +323,29 @@ install -m 644 "${KEY}.pub" "$LIB_PUB"
 install -m 644 "$CERT"      "$LIB_CERT"
 
 # Priv: agenix-encrypted to the host's bootstrap age pub (declared in
-# secrets/secrets.nix's recipient list). Uses EDITOR="cp <src>" so agenix
-# opens its tempfile via cp, which overwrites with our SSH priv content.
-echo "agenix-encrypting SSH host priv → $(rel "$SECRETS_PRIV_ABS")"
-cd "$REPO_ROOT/secrets"
-EDITOR="cp $KEY" \
-  nix --extra-experimental-features 'nix-command flakes' \
-      run github:ryantm/agenix -- \
-        -i "$AGE_IDENTITY" \
-        -e "$SECRETS_PRIV_REL" >/dev/null \
-  || die "agenix encrypt failed (does the recipient list resolve to a real key?)"
-cd - >/dev/null
+# secrets/secrets.nix's recipient list).
+#
+# Idempotency: if the .age file already exists, skip the re-encrypt. The
+# file is encrypted only to the target host (blushda is intentionally NOT
+# a recipient), so agenix -e would try to decrypt it for editing, fail
+# with "no identity matched any of the recipients," and exit. To force a
+# re-encrypt (e.g. after rotating the SSH host keypair), rm the .age file
+# and re-run.
+if [ -f "$SECRETS_PRIV_ABS" ]; then
+  echo "agenix .age already exists at $(rel "$SECRETS_PRIV_ABS") — skipping (rm to force re-encrypt)"
+else
+  # EDITOR="cp <src>" — agenix opens its tempfile via cp, which overwrites
+  # with our SSH priv content. On EDITOR exit agenix encrypts.
+  echo "agenix-encrypting SSH host priv → $(rel "$SECRETS_PRIV_ABS")"
+  cd "$REPO_ROOT/secrets"
+  EDITOR="cp $KEY" \
+    nix --extra-experimental-features 'nix-command flakes' \
+        run github:ryantm/agenix -- \
+          -i "$AGE_IDENTITY" \
+          -e "$SECRETS_PRIV_REL" >/dev/null \
+    || die "agenix encrypt failed (does the recipient list resolve to a real key?)"
+  cd - >/dev/null
+fi
 
 # ======================================================================
 # Phase 4 — Report
