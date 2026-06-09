@@ -1,75 +1,145 @@
 #!/usr/bin/env bash
-# gen-host-key.sh — ensure an ed25519 SSH host key for <hostname> exists,
-# using keepassxc as the canonical store and ~/.local/share/... as a cache.
+# gen-host-key.sh — single entry point for the full host-identity bootstrap.
 #
-# Behavior:
-#   1. Look up keepassxc entry "ssh-host-keys/<hostname>".
-#   2. If present : export both attachments into the local cache.
-#      If absent  : ssh-keygen a new key, push to keepassxc, write the cache.
-#   3. Reconcile with secrets/secrets.nix:
-#        no <hostname> entry            → insert one (before `editors =`)
-#        placeholder (REPLACE_WITH_…)   → replace with real pubkey
-#        real entry matches cache       → no-op
-#        real entry differs from cache  → hard fail
+# Per <host>, this script makes the following exist (idempotent across runs):
+#
+#   ~/.local/share/nixos-configs/host-bootstrap-keys/<host>.key
+#       Per-host age priv. kdbx-backed at ssh-host-bootstrap-keys/<host>.
+#       Becomes /etc/age/host.key on the target via install-host.sh
+#       extra-files staging.
+#
+#   ~/.local/share/nixos-configs/host-keys/<host>_ed25519{,.pub,-cert.pub}
+#       SSH host keypair + cert. kdbx-backed at ssh-host-keys/<host> (priv,
+#       pub, cert as three attachments).
+#
+#   secrets/secrets.nix
+#       <host> identity line set to the bootstrap age pubkey (was the SSH
+#       host pubkey before this change).
+#
+#   secrets/host-keys/<host>_ssh_host_ed25519_key.age   (in the repo)
+#       SSH host priv, agenix-encrypted to the host's bootstrap age key.
+#       Must be declared in secrets/secrets.nix beforehand:
+#         "host-keys/<host>_ssh_host_ed25519_key.age".publicKeys =
+#             realKeys [ <host> ];
+#       The script bails clearly if the declaration is missing.
+#
+#   lib/host-certs/<host>_ssh_host_ed25519_key{,.pub,-cert.pub}        (in the repo)
+#       SSH host pub + cert, committed plaintext (they're public).
+#
+# kdbx is the canonical store for the bootstrap age key, the SSH host
+# keypair, and the cert; the local cache on blushda is a working copy.
 #
 # keepassxc-cli requirement: 2.7.7 or newer. 2.7.6 silently dropped the
-# second back-to-back attachment-import (private landed, .pub didn't,
-# exit code 0). Verify with `keepassxc-cli --version` before running.
-#
-# Re-running for an existing host is safe and idempotent — same pubkey
-# every time, which is the whole point of caching to keepassxc.
+# second back-to-back attachment-import. Verify with `keepassxc-cli --version`.
 #
 # Usage:
-#   scripts/gen-host-key.sh <hostname>
+#   scripts/gen-host-key.sh <hostname> [extra-principals]
+#     extra-principals: comma-separated; hostname is always included first.
+#                       Pass the host's static IP so SSH-by-IP works
+#                       (OpenSSH 9.x+ requires principal match).
 #
-# Env vars (both have sane defaults — typically you set neither):
+# Env (defaults usually fine):
 #   KDBX_FILE  path to the .kdbx
 #              default: $HOME/7e7 Dropbox/Greg Schwimer/Personal/keys/secrets.kdbx
-#   KDBX_PW    kdbx unlock password. If unset, prompts once and exports
-#              so child scripts in the same shell reuse it.
+#   KDBX_PW    kdbx unlock password. If unset, prompts once and exports.
 
 set -euo pipefail
 
-[ "$#" -eq 1 ] || { echo "usage: $0 <hostname>" >&2; exit 1; }
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] \
+  || { echo "usage: $0 <hostname> [extra-principals]" >&2; exit 1; }
 
 HOSTNAME="$1"
+EXTRA_PRINCIPALS="${2:-}"
+if [ -n "$EXTRA_PRINCIPALS" ]; then
+  PRINCIPALS="${HOSTNAME},${EXTRA_PRINCIPALS}"
+else
+  PRINCIPALS="$HOSTNAME"
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Cache paths.
+BOOT_CACHE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/host-bootstrap-keys"
+BOOT_KEY="$BOOT_CACHE_DIR/${HOSTNAME}.key"
+
 KEY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/host-keys"
 KEY="$KEY_DIR/${HOSTNAME}_ed25519"
+CERT="${KEY}-cert.pub"
+
+# Repo paths.
+LIB_PUB="$REPO_ROOT/lib/host-certs/${HOSTNAME}_ssh_host_ed25519_key.pub"
+LIB_CERT="$REPO_ROOT/lib/host-certs/${HOSTNAME}_ssh_host_ed25519_key-cert.pub"
+SECRETS_PRIV_REL="host-keys/${HOSTNAME}_ssh_host_ed25519_key.age"     # relative to secrets/
+SECRETS_PRIV_ABS="$REPO_ROOT/secrets/$SECRETS_PRIV_REL"
+SECRETS_FILE="$REPO_ROOT/secrets/secrets.nix"
+
+# kdbx entries.
 KDBX_FILE="${KDBX_FILE:-$HOME/7e7 Dropbox/Greg Schwimer/Personal/keys/secrets.kdbx}"
-KDBX_ENTRY="ssh-host-keys/$HOSTNAME"
+KDBX_BOOT_ENTRY="ssh-host-bootstrap-keys/$HOSTNAME"
+KDBX_KEY_ENTRY="ssh-host-keys/$HOSTNAME"
+KDBX_CA_ENTRY="SSH CA/SSH Host CA"
+
+# age identity for re-encrypting (workstation authoring key).
+AGE_IDENTITY="$HOME/.config/sops/age/keys.txt"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+rel() { echo "${1#$REPO_ROOT/}"; }
+
+# ----- preflight ----------------------------------------------------------
 
 command -v keepassxc-cli >/dev/null \
   || die "keepassxc-cli not on PATH (macOS: brew install keepassxc)"
-[ -r "$KDBX_FILE" ] || die "kdbx file not readable: $KDBX_FILE"
+command -v ssh-keygen >/dev/null \
+  || die "ssh-keygen not on PATH"
 
-# Prompt once per shell, export so subsequent script invocations reuse it.
+# age-keygen: direct if on PATH, otherwise run via `nix shell nixpkgs#age`.
+# This lets the script run without a permanent age install on blushda —
+# nix is already a hard dependency of the rest of the workflow.
+if command -v age-keygen >/dev/null; then
+  age_keygen() { age-keygen "$@"; }
+else
+  command -v nix >/dev/null \
+    || die "neither age-keygen nor nix on PATH; one of them is needed"
+  age_keygen() {
+    nix --extra-experimental-features 'nix-command flakes' \
+        shell nixpkgs#age --command age-keygen "$@"
+  }
+fi
+[ -r "$KDBX_FILE" ] || die "kdbx file not readable: $KDBX_FILE"
+[ -f "$AGE_IDENTITY" ] || die "no age authoring identity at $AGE_IDENTITY"
+
 if [ -z "${KDBX_PW:-}" ]; then
-  read -rsp "kdbx password: " KDBX_PW
-  echo
+  printf 'kdbx password: '; stty -echo; IFS= read -r KDBX_PW; stty echo; echo
   export KDBX_PW
 fi
 
-mkdir -p "$KEY_DIR"
-chmod 700 "$KEY_DIR"
-
-# Helper: pipe the kdbx password to a keepassxc-cli invocation.
+# Helper: pipe kdbx password to keepassxc-cli.
 kpx() { printf '%s\n' "$KDBX_PW" | keepassxc-cli "$@"; }
 
-# Helper: insert/replace a host's pubkey in secrets/secrets.nix.
-# Idempotent: re-running with the same value produces no further change.
-# Replaces an existing entry line (real or placeholder) in place; otherwise
-# inserts a new entry before the first `<name>Access =` line — the convention
-# established in secrets.nix for access-list declarations. Aborts if no
-# insertion anchor exists (i.e. secrets.nix has been restructured in a way
-# the script can't reason about).
-modify_secrets_nix() {
-  local host="$1" pubkey="$2"
-  local file="$3"
-  local tmp="${file}.tmp.$$"
+# Helper: ensure the parent group of a kdbx entry path exists. kpx add
+# doesn't auto-create groups, so a fresh kdbx (or a host-class slot we've
+# never used before — e.g. ssh-host-bootstrap-keys/) needs the group
+# materialized first.
+kpx_ensure_parent_group() {
+  local entry_path="$1"
+  local parent="${entry_path%/*}"
+  [ "$parent" = "$entry_path" ] && return 0   # no slash, nothing to create
+  if ! kpx ls --quiet "$KDBX_FILE" "$parent" >/dev/null 2>&1; then
+    kpx mkdir --quiet "$KDBX_FILE" "$parent" >/dev/null \
+      || die "failed to create kdbx group '$parent'"
+  fi
+}
 
+# Validate password works.
+kpx ls --quiet "$KDBX_FILE" / >/dev/null 2>&1 \
+  || die "kdbx unlock failed (wrong password? bad file?)"
+
+# Helper: insert/replace a host's identity in secrets/secrets.nix.
+# Pattern is unchanged; the *value* is what's changing (was an ssh-ed25519
+# pubkey, now an age1… pubkey). awk treats the value as opaque.
+modify_secrets_nix() {
+  local host="$1" pubkey="$2" file="$3"
+  local tmp="${file}.tmp.$$"
   if ! awk -v host="$host" -v key="$pubkey" '
     BEGIN { handled = 0 }
     $0 ~ "^[[:space:]]*" host "[[:space:]]*=" {
@@ -85,142 +155,202 @@ modify_secrets_nix() {
     END { exit (handled ? 0 : 2) }
   ' "$file" > "$tmp"; then
     rm -f "$tmp"
-    die "couldn'\''t find an insertion point in $file (expected a '<name>Access =' line)"
+    die "couldn't find an insertion point in $file (expected a '<name>Access =' line)"
   fi
-
   mv "$tmp" "$file"
 }
 
-# 1) Validate password against the DB (any successful ls works).
-kpx ls --quiet "$KDBX_FILE" / >/dev/null 2>&1 \
-  || die "kdbx unlock failed (wrong password? bad file?)"
+mkdir -p "$BOOT_CACHE_DIR" "$KEY_DIR" \
+         "$REPO_ROOT/lib/host-certs" "$REPO_ROOT/secrets/host-keys"
+chmod 700 "$BOOT_CACHE_DIR" "$KEY_DIR"
 
-# 2) Pull or generate.
-if kpx show --quiet "$KDBX_FILE" "$KDBX_ENTRY" >/dev/null 2>&1; then
-  echo "Pulling $KDBX_ENTRY from keepassxc → $KEY"
+# ======================================================================
+# Phase 0 — Bootstrap age key
+# ======================================================================
+#
+# Ensures the per-host age keypair exists in the cache and kdbx, and that
+# the corresponding pubkey is the <host> identity in secrets/secrets.nix.
+# The pub is needed BEFORE Phase 4 (agenix encryption) because
+# secrets.nix's recipient resolution reads it.
+
+if kpx show --quiet "$KDBX_FILE" "$KDBX_BOOT_ENTRY" >/dev/null 2>&1; then
+  echo "Pulling $KDBX_BOOT_ENTRY from keepassxc → $BOOT_KEY"
+  # Pre-create the destination at mode 600 so keepassxc-cli's write
+  # inherits our perms (it creates 644 by default).
+  ( umask 077 && : > "$BOOT_KEY" )
+  kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_BOOT_ENTRY" \
+      host_bootstrap_age.key "$BOOT_KEY" >/dev/null \
+    || die "failed to export bootstrap age key attachment"
+  chmod 600 "$BOOT_KEY"
+else
+  echo "No keepassxc entry $KDBX_BOOT_ENTRY — generating fresh age keypair"
+  rm -f "$BOOT_KEY"
+  age_keygen -o "$BOOT_KEY" 2>/dev/null
+  chmod 600 "$BOOT_KEY"
+  echo "Pushing $KDBX_BOOT_ENTRY to keepassxc"
+  kpx_ensure_parent_group "$KDBX_BOOT_ENTRY"
+  kpx add --quiet --generate "$KDBX_FILE" "$KDBX_BOOT_ENTRY" >/dev/null \
+    || die "failed to add entry $KDBX_BOOT_ENTRY to keepassxc"
+  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_BOOT_ENTRY" \
+      host_bootstrap_age.key "$BOOT_KEY" >/dev/null \
+    || die "failed to import bootstrap age key attachment"
+fi
+
+# Derive the bootstrap age pubkey from the priv.
+BOOT_PUB="$(age_keygen -y "$BOOT_KEY")"
+case "$BOOT_PUB" in
+  age1*) ;;
+  *) die "unexpected age-keygen -y output: $BOOT_PUB" ;;
+esac
+
+# Reconcile <host> identity in secrets.nix with the bootstrap age pub.
+SECRETS_HOST_VAL=$(
+  sed -n "s/^[[:space:]]*${HOSTNAME}[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+      "$SECRETS_FILE" || true
+)
+if [ -z "$SECRETS_HOST_VAL" ]; then
+  modify_secrets_nix "$HOSTNAME" "$BOOT_PUB" "$SECRETS_FILE"
+  echo "Inserted '$HOSTNAME = \"$BOOT_PUB\"' into secrets/secrets.nix"
+elif [[ "$SECRETS_HOST_VAL" == *REPLACE_WITH* ]] \
+     || [[ "$SECRETS_HOST_VAL" == ssh-* ]] \
+     || [ "$SECRETS_HOST_VAL" != "$BOOT_PUB" ]; then
+  modify_secrets_nix "$HOSTNAME" "$BOOT_PUB" "$SECRETS_FILE"
+  echo "Updated '$HOSTNAME' identity in secrets/secrets.nix (now age pubkey)"
+else
+  echo "secrets.nix '$HOSTNAME' identity already matches bootstrap age pub"
+fi
+
+# Precondition for Phase 4: the per-host host-key .age recipient list must
+# already be declared. We DON'T auto-edit this — it's a structural choice
+# the user makes once per host.
+grep -q "\"$SECRETS_PRIV_REL\"" "$SECRETS_FILE" \
+  || die "secrets/secrets.nix doesn't declare \"$SECRETS_PRIV_REL\" — add a line like:
+       \"$SECRETS_PRIV_REL\".publicKeys = realKeys [ $HOSTNAME ];
+     in the 'in { … }' block, then re-run."
+
+# ======================================================================
+# Phase 1 — SSH host keypair
+# ======================================================================
+
+if kpx show --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" >/dev/null 2>&1; then
+  echo "Pulling $KDBX_KEY_ENTRY from keepassxc → $KEY"
   tmp_priv="$(mktemp)"
   tmp_pub="$(mktemp)"
   trap 'rm -f "$tmp_priv" "$tmp_pub"' EXIT
-  kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+  kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" \
       ssh_host_ed25519_key     "$tmp_priv" >/dev/null \
-    || die "failed to export private attachment"
-  kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+    || die "failed to export ssh_host_ed25519_key attachment"
+  kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" \
       ssh_host_ed25519_key.pub "$tmp_pub"  >/dev/null \
-    || die "failed to export public attachment"
+    || die "failed to export ssh_host_ed25519_key.pub attachment"
   install -m 600 "$tmp_priv" "$KEY"
   install -m 644 "$tmp_pub"  "${KEY}.pub"
+  rm -f "$tmp_priv" "$tmp_pub"
+  trap - EXIT
 else
-  echo "No keepassxc entry $KDBX_ENTRY — generating fresh ed25519 key"
-  # Clear any stale cache from a previous failed run; if we're in this
-  # branch the keepassxc side has no entry, so any local file is orphaned.
-  # Without the rm, ssh-keygen prompts "Overwrite (y/n)?" — and with stdout
-  # redirected to /dev/null below, that prompt is invisible and the script
-  # silently exits via set -e when ssh-keygen returns non-zero.
+  echo "No keepassxc entry $KDBX_KEY_ENTRY — generating fresh ed25519 SSH keypair"
   rm -f "$KEY" "${KEY}.pub"
   ssh-keygen -t ed25519 -N "" -f "$KEY" \
     -C "ssh_host_ed25519_key@$HOSTNAME" >/dev/null
-  echo "Pushing $KDBX_ENTRY to keepassxc"
-  # `--generate` fills the (unused) password field with a random value.
-  kpx add --quiet --generate "$KDBX_FILE" "$KDBX_ENTRY" >/dev/null \
-    || die "failed to add entry $KDBX_ENTRY to keepassxc"
-  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+  echo "Pushing $KDBX_KEY_ENTRY to keepassxc"
+  kpx_ensure_parent_group "$KDBX_KEY_ENTRY"
+  kpx add --quiet --generate "$KDBX_FILE" "$KDBX_KEY_ENTRY" >/dev/null \
+    || die "failed to add entry $KDBX_KEY_ENTRY to keepassxc"
+  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" \
       ssh_host_ed25519_key     "$KEY"        >/dev/null \
-    || die "failed to import private attachment"
-  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+    || die "failed to import ssh_host_ed25519_key attachment"
+  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" \
       ssh_host_ed25519_key.pub "${KEY}.pub"  >/dev/null \
-    || die "failed to import public attachment"
+    || die "failed to import ssh_host_ed25519_key.pub attachment"
 fi
 
-# 2b) Pull or sign the host certificate.
-# Cert lives as a third attachment on the host's keepassxc entry. If absent,
-# we pull the CA private key from "SSH CA/SSH Host CA" (attachment host_ca),
-# sign, push the cert back, and shred the CA copy from disk. Re-runs that
-# find the cert attachment just pull it — idempotent.
+# ======================================================================
+# Phase 2 — SSH host certificate
+# ======================================================================
 
-# The key block above only sets a temp-file trap inside its pull branch;
-# clear any residual trap before our own setup. tmp_priv/tmp_pub were
-# install(1)-copied to $KEY earlier, so the source temps are now orphaned —
-# rm them explicitly (no-op if they don't exist).
-rm -f "${tmp_priv:-}" "${tmp_pub:-}"
-trap - EXIT
-
-CERT="${KEY}-cert.pub"
-
-if kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+if kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" \
        ssh_host_ed25519_key-cert.pub "$CERT" 2>/dev/null; then
   chmod 644 "$CERT"
-  echo "Pulled cert from $KDBX_ENTRY → $CERT"
+  echo "Pulled cert from $KDBX_KEY_ENTRY → $CERT"
+
+  # If the user passed extra principals, sanity-check that the cached cert
+  # already matches. Re-signing is an explicit operation: delete the cert
+  # attachment from kdbx + the local cache, then re-run.
+  CERT_PRINCIPALS=$(ssh-keygen -L -f "$CERT" \
+                    | awk '/Principals:/{flag=1; sub(/.*Principals:/,""); print; flag=0; exit}' \
+                    | tr -d ' ' | tr '\n' ',' | sed 's/,$//')
+  if [ -n "$EXTRA_PRINCIPALS" ] && [ "$CERT_PRINCIPALS" != "$PRINCIPALS" ]; then
+    echo
+    echo "WARNING: cached cert principals ($CERT_PRINCIPALS) differ from requested ($PRINCIPALS)."
+    echo "         To re-sign with new principals: delete the cert attachment from kdbx"
+    echo "         (attachment ssh_host_ed25519_key-cert.pub on entry $KDBX_KEY_ENTRY)"
+    echo "         and remove $CERT, then re-run."
+  fi
 else
-  echo "No cert on $KDBX_ENTRY — signing host pubkey with CA"
+  echo "No cert on $KDBX_KEY_ENTRY — signing host pubkey with CA, principals: $PRINCIPALS"
   tmp_ca="$(mktemp)"
-  chmod 600 "$tmp_ca"
+  ( umask 077 && : > "$tmp_ca" )
   trap 'rm -f "$tmp_ca"' EXIT INT TERM
 
-  kpx attachment-export --quiet "$KDBX_FILE" "SSH CA/SSH Host CA" \
+  kpx attachment-export --quiet "$KDBX_FILE" "$KDBX_CA_ENTRY" \
       host_ca "$tmp_ca" >/dev/null \
-    || die "couldn't export 'host_ca' attachment from 'SSH CA/SSH Host CA'"
+    || die "couldn't export 'host_ca' attachment from '$KDBX_CA_ENTRY'"
+  chmod 600 "$tmp_ca"
 
-  # -h: this is a HOST certificate (not a user cert).
-  # -I: cert identity — a label shown by `ssh-keygen -L` and in sshd logs,
-  #     no role in validation.
-  # -V always:forever: never expires (OpenSSH 8.2+).
-  # No -n principals. Empty principal list means the cert is valid for any
-  # host the @cert-authority pattern in known_hosts trusts. We need this
-  # because principals would otherwise have to include every hostname / IP
-  # a client might reach the host on (LAN, VPN, DHCP-assigned IP, etc.),
-  # which is unworkable. The trust boundary is "signed by our CA"; see the
-  # README "SSH host certificates" section for the rationale.
-  ssh-keygen -s "$tmp_ca" -h -I "$HOSTNAME" \
+  # -h: host cert. -I: label. -V: validity. -n: principals (OpenSSH 9.x+
+  # requires non-empty list for host certs; "no principals = any host" was
+  # deprecated). Pass IP as extra-principals when calling this script so
+  # SSH-by-IP works.
+  ssh-keygen -s "$tmp_ca" -h -I "$HOSTNAME" -n "$PRINCIPALS" \
              -V "always:forever" "${KEY}.pub" >/dev/null \
     || die "ssh-keygen cert signing failed"
 
-  # CA private off disk ASAP. The trap is belt-and-suspenders for any abort
-  # between here and rm.
   rm -f "$tmp_ca"
   trap - EXIT INT TERM
 
-  echo "Pushing $CERT to keepassxc as attachment on $KDBX_ENTRY"
-  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_ENTRY" \
+  echo "Pushing cert to keepassxc as attachment on $KDBX_KEY_ENTRY"
+  kpx attachment-import --quiet "$KDBX_FILE" "$KDBX_KEY_ENTRY" \
       ssh_host_ed25519_key-cert.pub "$CERT" >/dev/null \
     || die "failed to import cert attachment"
 fi
 
-# 3) Reconcile with secrets/secrets.nix.
-# Compare only the key type + data, not the comment field (those differ
-# between the ssh-keygen comment and whatever's pasted into secrets.nix).
-SECRETS_FILE="$REPO_ROOT/secrets/secrets.nix"
-PUB_CACHE=$(awk '{print $1, $2}' "${KEY}.pub")
-PUB_SECRETS_RAW=$(
-  sed -n "s/^[[:space:]]*${HOSTNAME}[[:space:]]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
-      "$SECRETS_FILE" || true
-)
+# ======================================================================
+# Phase 3 — Write declarative repo artifacts
+# ======================================================================
 
-if [ -z "$PUB_SECRETS_RAW" ]; then
-  modify_secrets_nix "$HOSTNAME" "$PUB_CACHE" "$SECRETS_FILE"
-  echo "Inserted '$HOSTNAME' into secrets/secrets.nix"
-elif [[ "$PUB_SECRETS_RAW" == *REPLACE_WITH* ]]; then
-  modify_secrets_nix "$HOSTNAME" "$PUB_CACHE" "$SECRETS_FILE"
-  echo "Replaced placeholder for '$HOSTNAME' in secrets/secrets.nix"
-else
-  PUB_SECRETS=$(awk '{print $1, $2}' <<<"$PUB_SECRETS_RAW")
-  if [ "$PUB_CACHE" != "$PUB_SECRETS" ]; then
-    echo
-    echo "ERROR: pubkey for '$HOSTNAME' differs between keepassxc and secrets.nix"
-    echo "  keepassxc:   $PUB_CACHE"
-    echo "  secrets.nix: $PUB_SECRETS"
-    echo
-    echo "One of them is stale. Resolve before continuing — DO NOT install a"
-    echo "host whose pubkey doesn't match the recipient list it'll be installed"
-    echo "with, or its agenix secrets won't decrypt on first boot."
-    exit 1
-  else
-    echo "Pubkey matches secrets/secrets.nix entry for $HOSTNAME"
-  fi
-fi
+# Pub + cert: plaintext, committed.
+install -m 644 "${KEY}.pub" "$LIB_PUB"
+install -m 644 "$CERT"      "$LIB_CERT"
+
+# Priv: agenix-encrypted to the host's bootstrap age pub (declared in
+# secrets/secrets.nix's recipient list). Uses EDITOR="cp <src>" so agenix
+# opens its tempfile via cp, which overwrites with our SSH priv content.
+echo "agenix-encrypting SSH host priv → $(rel "$SECRETS_PRIV_ABS")"
+cd "$REPO_ROOT/secrets"
+EDITOR="cp $KEY" \
+  nix --extra-experimental-features 'nix-command flakes' \
+      run github:ryantm/agenix -- \
+        -i "$AGE_IDENTITY" \
+        -e "$SECRETS_PRIV_REL" >/dev/null \
+  || die "agenix encrypt failed (does the recipient list resolve to a real key?)"
+cd - >/dev/null
+
+# ======================================================================
+# Phase 4 — Report
+# ======================================================================
 
 echo
-echo "Public key:"
+echo "Bootstrap age pub: $BOOT_PUB"
+echo
+echo "SSH host pub:"
 cat "${KEY}.pub"
 echo
 echo "Certificate (ssh-keygen -L):"
 ssh-keygen -L -f "$CERT" | sed -E 's/^/  /'
+echo
+echo "Repo artifacts ready:"
+echo "  $(rel "$LIB_PUB")"
+echo "  $(rel "$LIB_CERT")"
+echo "  $(rel "$SECRETS_PRIV_ABS")"
+echo
+echo "Next: git add -A && git commit -m '$HOSTNAME: refresh host identity' && git push"

@@ -32,47 +32,50 @@ One-time setup on the authoring machine (the Mac you edit this repo from, referr
 
 ## SSH host certificates
 
-Every host built through this repo is given an ed25519 host key whose pubkey is signed by an SSH Certificate Authority (the CA lives in the kdbx at `SSH CA/SSH Host CA`). `scripts/gen-host-key.sh` does the signing automatically as part of provisioning a new host's identity — the signed cert lives in the kdbx alongside the host's key, gets staged at install time, and ends up at `/etc/ssh/ssh_host_ed25519_key-cert.pub` on the installed system. sshd presents it via `HostCertificate` (see [modules/services/openssh.nix](modules/services/openssh.nix)), and any workstation that has the CA installed (Prerequisites step above) trusts the host without fingerprint prompts — across re-installs, across cert principals being extended, forever.
+Every host built through this repo gets a fully declarative cryptographic identity. Three artifacts live in the repo per host, plus one out-of-band bootstrap file:
 
-Validity is set to `always:forever`. Rotating the CA would mean re-signing every host (just re-run `gen-host-key.sh <host>` — it detects a missing cert and re-signs); the workstation `@cert-authority` line then needs to be updated by hand. Not expected to happen soon.
+| Artifact | Where | Mechanism |
+|---|---|---|
+| Bootstrap age key | `/etc/age/host.key` (only file out of repo) | Generated on blushda, staged once at install via `install-host.sh --extra-files`. Used by agenix as the decryption identity (see [modules/secrets.nix](modules/secrets.nix)). |
+| SSH host private key | `secrets/host-keys/<host>_ssh_host_ed25519_key.age` | agenix-encrypted to the host's bootstrap age pub. Decrypted at activation, placed at `/etc/ssh/ssh_host_ed25519_key` via `age.secrets.<…>.path`. |
+| SSH host public key | `lib/host-certs/<host>_ssh_host_ed25519_key.pub` | Plaintext (public). Placed at `/etc/ssh/ssh_host_ed25519_key.pub` via `environment.etc`. |
+| SSH host certificate | `lib/host-certs/<host>_ssh_host_ed25519_key-cert.pub` | Plaintext (public). Placed at `/etc/ssh/ssh_host_ed25519_key-cert.pub` via `environment.etc`. Signed by the Host CA in the kdbx at `SSH CA/SSH Host CA`. |
 
-To inspect a host's cert locally after `gen-host-key.sh` has run:
+Tampering with any of the three on-host files (priv, pub, cert) is reverted on the next `nixos-rebuild switch`. Rotation is a routine git operation: re-run `gen-host-key.sh <host>`, commit, rebuild. The CA pubkey is committed at [lib/host-ca.pub](lib/host-ca.pub); workstations install it once via [scripts/trust-ssh-ca.sh](scripts/trust-ssh-ca.sh).
+
+Cert validity is set to `always:forever`. Cert principals always include the hostname; pass the host's static IP as the script's second arg so SSH-by-IP also works (OpenSSH 9.x+ requires non-empty principals).
+
+### Provisioning a host's identity
+
+`scripts/gen-host-key.sh <host> [extra-principals]` is the one entry point. It generates or pulls (per host) the bootstrap age keypair (kdbx-backed at `ssh-host-bootstrap-keys/<host>`), the SSH host keypair (kdbx-backed at `ssh-host-keys/<host>`), signs the cert with the Host CA, writes the three repo artifacts, and updates the `<host>` identity line in `secrets/secrets.nix` to the new bootstrap age pubkey.
+
+```bash
+scripts/gen-host-key.sh pleiades 172.16.1.249
+scripts/gen-host-key.sh iris     172.16.1.248
+git add -A && git commit -m 'host identity for <host>' && git push
+```
+
+Idempotent: re-runs are no-ops for artifacts that already exist. To re-sign a cert (e.g. change principals): delete the cert attachment from kdbx (`ssh-host-keys/<host>` → `ssh_host_ed25519_key-cert.pub`) and remove `~/.local/share/nixos-configs/host-keys/<host>_ed25519-cert.pub`, then re-run.
+
+### Sanity checks
+
+Inspect the cert locally:
 
 ```
-ssh-keygen -L -f ~/.local/share/nixos-configs/host-keys/<host>_ed25519-cert.pub
+ssh-keygen -L -f lib/host-certs/<host>_ssh_host_ed25519_key-cert.pub
 ```
 
-To verify a remote host is presenting the cert correctly:
+Verify a remote host is presenting it:
 
 ```
 ssh -v schwim@<host> 2>&1 | grep -i 'cert\|host key'
-# expect: "Server host certificate: ssh-ed25519-cert-v01@openssh.com ..."
-# expect: "Host '<host>' is known and matches the ED25519-CERT host certificate."
+# expect: Server host certificate ... matches the ED25519-CERT host certificate.
+# expect: NO "authenticity ... can't be established" line.
 ```
 
-The installer ISO does **not** get a cert — installers are ephemeral and rebooting regenerates host keys anyway. `install-host.sh` connects to the installer with `StrictHostKeyChecking=no` to deal with that.
+### Installer ISO opts out
 
-### Applying certs to already-installed hosts (no re-install)
-
-If a host was installed before this workflow landed (or before its keepassxc entry got a cert), copy the cert in and roll a rebuild:
-
-```bash
-# On the workstation: produce the cert if it doesn't exist yet.
-scripts/gen-host-key.sh <host>
-
-# Push it onto the host.
-scp ~/.local/share/nixos-configs/host-keys/<host>_ed25519-cert.pub \
-    schwim@<host>:/tmp/
-ssh schwim@<host> \
-    sudo install -m 644 /tmp/<host>_ed25519-cert.pub \
-                        /etc/ssh/ssh_host_ed25519_key-cert.pub
-
-# Roll forward. With my.services.openssh.useHostCertificate defaulting on,
-# the rebuild adds HostCertificate to sshd_config and restarts sshd.
-ssh schwim@<host> 'cd nixos-configs && git pull && sudo nixos-rebuild switch --flake .#<host>'
-```
-
-After that, blushda's SSH client sees the cert and trusts it via the `@cert-authority` line installed by `trust-ssh-ca.sh`.
+The installer ISO sets `my.services.openssh.useHostCertificate = false` — installers are ephemeral and regenerate host keys on every boot. `install-host.sh` connects to the installer with `StrictHostKeyChecking=no` to deal with that.
 
 ### Trusting the Host CA on every fleet host (client-side)
 

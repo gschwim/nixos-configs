@@ -106,8 +106,8 @@ let
   # scripts/gen-host-key.sh which inserts/replaces these in place.
   blushda = "age1gumg838j0s9fpmly4umss05e994dh7zgq6j94fyx8tel9v6nqansn8aq9p";
 
-  pleiades = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOAbeS76G7cLvoJoZuR26X25gqEF24vnDgadtGf2Fisg";
-  iris = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILRcZcUlVW7MrL/SojLy247C0IHvi1f7RrS/ZCpfvoR8";
+  pleiades = "age13xaq0a24ch4ranfqsmc2qf6gt5fhw9k505r5kzh9v355q54maqms5lcawf";
+  iris = "age1cmdhrscc0l6uz5j02td3pedfdv768vhu0glm0mkhj5edw3gkqgjq5y3kd6";
 
   # ---- Access lists --------------------------------------------------------
   # Filter placeholder identities out of any list. Once gen-host-key.sh
@@ -129,20 +129,24 @@ let
   # answers "who can decrypt this secret?" in one place.
   wifiAccess = allAccess ++ realKeys [ iris ];
 
-  # User-cert access lists. Each user-cert secret is encrypted ONLY to the
-  # one host that should decrypt it — pleiades's user cert is only for
-  # pleiades, not for the wider fleet. Editor workstations are NOT included
-  # because we never need to edit a user-cert secret in place; we just
-  # regenerate via scripts/provision-user-key.sh, which writes a fresh
-  # encrypted blob.
-  pleiadesUserAccess = realKeys [ pleiades ];
-  irisUserAccess     = realKeys [ iris ];
+  # Per-host "decrypt only by this host" access lists. Used for any secret
+  # whose plaintext should never be readable from anywhere other than the
+  # one host that consumes it — user keypairs, SSH host privs, etc. Editor
+  # workstations are NOT included because we never edit these in place; we
+  # regenerate (via scripts/provision-user-key.sh or scripts/gen-host-key.sh)
+  # and write a fresh encrypted blob.
+  pleiadesOnly = realKeys [ pleiades ];
+  irisOnly     = realKeys [ iris ];
 in {
   "wifi-secrets.age".publicKeys = wifiAccess;
 
-  # Per-host, per-user keypair secrets. Each is encrypted only to the
-  # corresponding host so that host (and only that host) can decrypt the
-  # priv key during nixos-rebuild activation.
-  "users/pleiades_schwim_id_ed25519.age".publicKeys = pleiadesUserAccess;
-  "users/iris_schwim_id_ed25519.age".publicKeys     = irisUserAccess;
+  # Per-host user keypair (CA-signed for outbound SSH from that host).
+  # See modules/host.nix `my.host.management` and scripts/provision-user-key.sh.
+  "users/pleiades_schwim_id_ed25519.age".publicKeys = pleiadesOnly;
+  "users/iris_schwim_id_ed25519.age".publicKeys     = irisOnly;
+
+  # Per-host SSH host private key. agenix decrypts at activation and
+  # places at /etc/ssh/ssh_host_ed25519_key via modules/services/openssh.nix.
+  "host-keys/pleiades_ssh_host_ed25519_key.age".publicKeys = pleiadesOnly;
+  "host-keys/iris_ssh_host_ed25519_key.age".publicKeys     = irisOnly;
 }

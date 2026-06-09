@@ -1,6 +1,7 @@
 { config, lib, ... }:
 let
-  cfg = config.my.services.openssh;
+  cfg      = config.my.services.openssh;
+  hostName = config.networking.hostName;
 in {
   options.my.services.openssh = {
     enable = lib.mkOption {
@@ -13,10 +14,21 @@ in {
       type        = lib.types.bool;
       default     = true;
       description = ''
-        Present a CA-signed host certificate to clients. Requires the file
-        /etc/ssh/ssh_host_ed25519_key-cert.pub to exist — install-host.sh
-        stages it as part of the install. Disable on ephemeral live ISOs
-        and any host whose key hasn't been signed yet.
+        Present a CA-signed host certificate to clients AND deploy the
+        full host identity declaratively from the repo. When on:
+
+          - /etc/ssh/ssh_host_ed25519_key.pub  ← lib/host-certs/<host>_…pub
+          - /etc/ssh/ssh_host_ed25519_key-cert.pub
+                                                ← lib/host-certs/<host>_…-cert.pub
+          - /etc/ssh/ssh_host_ed25519_key (priv) ← agenix-decrypted from
+              secrets/host-keys/<host>_ssh_host_ed25519_key.age at activation,
+              using the host's bootstrap age key at /etc/age/host.key as the
+              decryption identity (set by modules/secrets.nix).
+
+        Tampering with any of these reverts on next nixos-rebuild switch.
+        Rotation = re-run gen-host-key.sh + commit + rebuild.
+
+        Disable on ephemeral live ISOs (no declarative artifacts staged).
       '';
     };
 
@@ -67,6 +79,26 @@ in {
     }
     (lib.mkIf cfg.trustUserCA {
       environment.etc."ssh/user_ca.pub".source = ../../lib/user-ca.pub;
+    })
+    (lib.mkIf cfg.useHostCertificate {
+      # Pub + cert: plaintext, committed to lib/host-certs/, placed via
+      # environment.etc → symlinks into /etc/ssh/. Any local edit reverts
+      # on next rebuild.
+      environment.etc."ssh/ssh_host_ed25519_key.pub".source =
+        ../../lib/host-certs + "/${hostName}_ssh_host_ed25519_key.pub";
+      environment.etc."ssh/ssh_host_ed25519_key-cert.pub".source =
+        ../../lib/host-certs + "/${hostName}_ssh_host_ed25519_key-cert.pub";
+
+      # Priv: agenix-decrypted at activation. age.secrets.<name>.path puts
+      # the decrypted file directly at /etc/ssh/ssh_host_ed25519_key (as a
+      # symlink to /run/agenix/…, which sshd follows fine).
+      age.secrets."ssh-host-key-${hostName}" = {
+        file  = ../../secrets/host-keys + "/${hostName}_ssh_host_ed25519_key.age";
+        path  = "/etc/ssh/ssh_host_ed25519_key";
+        owner = "root";
+        group = "root";
+        mode  = "0600";
+      };
     })
     (lib.mkIf cfg.trustHostCA {
       # `programs.ssh.knownHosts.<name>` writes entries into

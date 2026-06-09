@@ -125,24 +125,36 @@ read -rp "Continue? (y/N) " ans
 # ----- stage extra-files ---------------------------------------------------
 
 rm -rf "$STAGING"
-mkdir -p "$STAGING/etc/ssh"
-install -m 600 "$HOST_KEY"       "$STAGING/etc/ssh/ssh_host_ed25519_key"
-install -m 644 "${HOST_KEY}.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key.pub"
 
-# Host certificate: gen-host-key.sh always produces this. If it's missing
-# we'd silently install a host that fails sshd startup (HostCertificate
-# points at a nonexistent file). Hard-fail here so the error is obvious.
-[ -f "${HOST_KEY}-cert.pub" ] \
-  || { echo "ERROR: missing cert at ${HOST_KEY}-cert.pub — did gen-host-key.sh complete?" >&2; exit 2; }
-install -m 644 "${HOST_KEY}-cert.pub" "$STAGING/etc/ssh/ssh_host_ed25519_key-cert.pub"
+# The bootstrap age key — the one out-of-band artifact per host. agenix on
+# the target uses this as its decryption identity (configured via
+# `age.identityPaths = [ "/etc/age/host.key" ]` in modules/secrets.nix);
+# everything else (SSH host priv, user-cert privs, etc.) is encrypted to
+# the corresponding bootstrap age PUB and decrypted at activation.
+BOOT_CACHE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/host-bootstrap-keys"
+BOOT_KEY="$BOOT_CACHE_DIR/${HOSTNAME}.key"
+[ -f "$BOOT_KEY" ] \
+  || { echo "ERROR: missing bootstrap age key at $BOOT_KEY — did gen-host-key.sh complete?" >&2; exit 2; }
+mkdir -p "$STAGING/etc/age"
+install -m 400 -o root -g root "$BOOT_KEY" "$STAGING/etc/age/host.key" 2>/dev/null \
+  || install -m 400 "$BOOT_KEY" "$STAGING/etc/age/host.key"
+# (Fallback for macOS where -o root requires sudo we don't want; mode 400
+# is preserved either way and nixos-anywhere chowns to root on the target.)
 
-# User keys + certs for management hosts: nothing to stage here. The
-# encrypted priv lives in secrets/users/<host>_<u>_id_ed25519.age and gets
-# decrypted by agenix on first activation (using the host SSH key staged
-# above as the decryption identity). The cert + pub are placed by tmpfiles
-# from the in-store paths in lib/users/. So install-host.sh just verifies
-# that every required artifact is present in the repo — if not, the
-# install would fail at first activation, so fail-fast here.
+# Repo artifacts (SSH host pub + cert + agenix-encrypted priv) — sanity-check
+# they exist; if they don't, the closure won't build. They aren't staged via
+# extra-files anymore — they ride in the closure via environment.etc and
+# age.secrets (see modules/services/openssh.nix).
+for f in "$REPO_ROOT/lib/host-certs/${HOSTNAME}_ssh_host_ed25519_key.pub" \
+         "$REPO_ROOT/lib/host-certs/${HOSTNAME}_ssh_host_ed25519_key-cert.pub" \
+         "$REPO_ROOT/secrets/host-keys/${HOSTNAME}_ssh_host_ed25519_key.age"; do
+  [ -f "$f" ] \
+    || { echo "ERROR: missing $(echo "$f" | sed "s|$REPO_ROOT/||") — run scripts/gen-host-key.sh $HOSTNAME" >&2; exit 2; }
+done
+
+# User keys + certs for management hosts: again, just verify the repo
+# artifacts exist. agenix decrypts on first activation; tmpfiles places
+# pub+cert from the in-store paths.
 if [ -n "$MGMT_USERS" ]; then
   for u in $MGMT_USERS; do
     slot="${HOSTNAME}_${u}"
