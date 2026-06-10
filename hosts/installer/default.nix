@@ -36,7 +36,7 @@ let
   };
   installerConsole = pkgs.writeShellApplication {
     name = "installer-console";
-    runtimeInputs = [ pkgs.tmux ];
+    runtimeInputs = [ pkgs.tmux pkgs.ncurses ];   # ncurses for `tput`
     bashOptions = [ "nounset" "pipefail" ];
     text = builtins.readFile ../../scripts/installer-console.sh;
   };
