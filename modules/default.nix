@@ -15,5 +15,6 @@
     ./power/prevent-sleep.nix
     ./secrets.nix
     ./home-manager.nix
+    ./system-info
   ];
 }

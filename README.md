@@ -30,6 +30,35 @@ One-time setup on the authoring machine (the Mac you edit this repo from, referr
 
   Idempotent — re-runs detect the existing line and exit. See "SSH host certificates" below for what this gets you.
 
+## Host metadata: `/etc/nixos-host-info` and `nixctl`
+
+Every installed host exposes a small declarative metadata file at `/etc/nixos-host-info` plus a `nixctl` CLI on the system PATH. Together they let any consumer — an in-repo helper, an out-of-repo home-manager helper, or a human — figure out what kind of system this is and act on it.
+
+### The file
+
+```
+HOSTNAME=pleiades
+FLAKE_TARGET=pleiades
+ROLE=desktop
+DESKTOP_ENVIRONMENT=gnome
+REBUILD_COMMIT=abc1234567abc1234567abc1234567abc1234567
+```
+
+Key=value, mirroring `/etc/os-release`. Consumers `. /etc/nixos-host-info` and read the variables. The file is `environment.etc`-managed (store symlink), so tampering reverts on next `ls`. Fields are derived from existing `my.host.role` / `my.desktop.*.enable` / `inputs.self` — adding a host requires no edits here; the artifact appears on first rebuild. `REBUILD_COMMIT` carries a `-dirty` suffix when the working tree wasn't clean at build time.
+
+`REBUILD_DATE` is intentionally **not** in the file — `nixctl info` computes it from the mtime of `/nix/var/nix/profiles/system` (the persistent profile symlink NixOS already maintains per generation), so we don't have to fight `environment.etc`'s build-time purity.
+
+### `nixctl`
+
+```
+nixctl                       # alias for: nixctl info
+nixctl info                  # pretty-prints the file + computed REBUILD_DATE
+nixctl rebuild               # sudo nixos-rebuild switch --flake $NIXOS_CONFIGS_DIR#<FLAKE_TARGET>
+nixctl rebuild <target>      # same, but with <target> overriding FLAKE_TARGET
+```
+
+`nixctl rebuild` reads `NIXOS_CONFIGS_DIR` from the env (set by your home-manager configuration). It auto-`sudo`s if not run as root and preserves both `HOME` and `NIXOS_CONFIGS_DIR` across the sudo boundary. If `NIXOS_CONFIGS_DIR` isn't set, it bails with a message pointing at home-manager setup as the fix; in that pre-HM bootstrap window just `cd` into the repo and run `sudo nixos-rebuild …` directly.
+
 ## SSH host certificates
 
 Every host built through this repo gets a fully declarative cryptographic identity. Three artifacts live in the repo per host, plus one out-of-band bootstrap file:
