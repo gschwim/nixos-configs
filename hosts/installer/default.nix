@@ -8,6 +8,9 @@
 # What this ISO does differently from the stock minimal installer:
 # - Console output goes to BOTH tty1 (VGA) and ttyS0 (serial) so it works in
 #   VMs and headless boxes without a display.
+# - On those consoles the autologin lands in a tmux split: a shell on the left,
+#   a live system-info dashboard (IPs, lsblk, SSH sessions, nixos-anywhere
+#   progress) on the right. See installer-console / installer-dashboard below.
 # - sshd is enabled with key-only auth; schwim's pubkey from blushda is
 #   embedded — `ssh schwim@<ip>` from blushda works immediately.
 # - schwim has passwordless sudo (installer is ephemeral, SSH-key-protected).
@@ -17,6 +20,26 @@
 { config, lib, pkgs, modulesPath, ... }:
 let
   adminKeys = import ../../lib/admin-keys.nix;
+
+  # Live console dashboard + its tmux wrapper. Packaged the same way as
+  # incus-launch (modules/services/incus.nix): a scripts/*.sh wrapped by
+  # writeShellApplication, which runs shellcheck + `bash -n` at build time.
+  installerDashboard = pkgs.writeShellApplication {
+    name = "installer-dashboard";
+    runtimeInputs = with pkgs; [ iproute2 util-linux procps gnugrep gawk coreutils ];
+    # Display loop: a no-match grep must not abort a render frame.
+    bashOptions = [ "nounset" "pipefail" ];
+    # SC2009 ("use pgrep") — we grep `ps` output deliberately: we want the
+    # formatted `sshd: <user>@<pty>` session line, not just the PIDs.
+    excludeShellChecks = [ "SC2009" ];
+    text = builtins.readFile ../../scripts/installer-dashboard.sh;
+  };
+  installerConsole = pkgs.writeShellApplication {
+    name = "installer-console";
+    runtimeInputs = [ pkgs.tmux ];
+    bashOptions = [ "nounset" "pipefail" ];
+    text = builtins.readFile ../../scripts/installer-console.sh;
+  };
 in {
   imports = [
     "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
@@ -71,7 +94,23 @@ in {
     htop
     nix-output-monitor
     cryptsetup
+    tmux
+    installerDashboard
+    installerConsole
   ];
+
+  # On the physical (tty1) and serial (ttyS0) consoles, drop the autologin
+  # session straight into a tmux split: interactive shell on the left, the
+  # live installer-dashboard on the right. The `$TMUX` guard stops the left
+  # pane's own login shell from relaunching the console; the tty guard leaves
+  # interactive `ssh schwim@…` sessions (on /dev/pts/N) at a plain prompt.
+  environment.loginShellInit = ''
+    if [ -z "''${TMUX:-}" ]; then
+      case "$(tty)" in
+        /dev/tty1|/dev/ttyS[0-9]*) installer-console ;;
+      esac
+    fi
+  '';
 
   # No-op the fleet-wide initial-password-expiry activation script. On a
   # normal host that forces the admin to set a password on first login
