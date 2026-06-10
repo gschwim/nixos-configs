@@ -22,17 +22,28 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exec tmux attach -t "$SESSION"
 fi
 
-# Create the session ATTACHED in a single invocation (no `-d`), then split.
+# Work around the Linux VGA/framebuffer console handing tmux a stale 80x24 size
+# at attach: tmux only adopts the real size when it gets a SIGWINCH, which on
+# this console doesn't arrive until the first keystroke — so the window stays
+# small and wrapping until you type. `tput` already reports the correct size,
+# so the dimensions ARE known to the kernel; tmux just needs a nudge to re-read
+# them.
 #
-# Why not new-session -d + attach: a detached session has no client to size
-# against, so tmux lays it out at the default 80x24; the later `attach` only
-# adopts the real console size on the first SIGWINCH (your first keystroke) —
-# hence the small, wrapping window until you type. Attaching directly makes
-# tmux read the true terminal size up front, exactly like a normal `tmux`
-# launch, which is why an interactive tmux never shows this glitch.
-#
-# The initial pane is a login shell = the LEFT/CLI pane. `split-window -h -d`
-# adds the dashboard to the RIGHT without stealing focus (`-d`), so the
-# operator lands on the left pane.
+# We `exec` into tmux below, so the tmux CLIENT inherits this process's PID
+# ($$). Fork a watcher first that sends that client a few SIGWINCHes once the
+# console has settled; tmux re-reads the (correct) size and resizes itself, no
+# keypress needed. A SIGWINCH when the size is already right is a harmless
+# redraw, and the watcher exits early once tmux is gone.
+self=$$
+(
+  for delay in 0.2 0.5 1 2; do
+    sleep "$delay"
+    kill -WINCH "$self" 2>/dev/null || exit 0
+  done
+) &
+
+# Attached new-session (no `-d`): the initial pane is a login shell = the
+# LEFT/CLI pane. `split-window -h -d` adds the dashboard on the RIGHT without
+# stealing focus, so the operator lands on the left pane.
 exec tmux new-session -s "$SESSION" \; \
   split-window -h -d -l 50% installer-dashboard
