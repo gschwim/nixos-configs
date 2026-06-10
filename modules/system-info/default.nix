@@ -28,9 +28,15 @@ let
 
   # writeShellApplication validates the script (shellcheck + bash -n) at
   # build time, which catches typos and quoting issues early.
+  #
+  # excludeShellChecks: SC1090 ("can't follow non-constant source") fires on
+  # `. "$INFO_FILE"` — fair as a generic warning but the source path is
+  # under our control (placed at /etc/nixos-host-info by environment.etc
+  # above), so the check has nothing useful to add.
   nixctl = pkgs.writeShellApplication {
     name = "nixctl";
     runtimeInputs = [ pkgs.util-linux ];   # for `column`
+    excludeShellChecks = [ "SC1090" ];
     text = builtins.readFile ./nixctl.sh;
   };
 in {
