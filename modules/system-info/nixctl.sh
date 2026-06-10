@@ -7,7 +7,7 @@
 #   nixctl info               Pretty-print /etc/nixos-host-info plus the
 #                             rebuild date (computed from the persistent
 #                             system profile symlink's mtime).
-#   nixctl rebuild [<target>] Run `sudo nixos-rebuild switch --flake $NIXOS_CONFIGS_DIR#<target>`.
+#   nixctl switch [<target>]  Run `sudo nixos-rebuild switch --flake $NIXOS_CONFIGS_DIR#<target>`.
 #                             Without <target>, uses FLAKE_TARGET from the
 #                             info file. Override to rebuild a sibling
 #                             host's config locally for testing.
@@ -31,7 +31,7 @@ nixctl — surface or act on this host's NixOS-flake metadata.
 
 Commands:
   info                       Show host metadata and last rebuild date.
-  rebuild [<target>]         nixos-rebuild switch this host (or <target>).
+  switch [<target>]          nixos-rebuild switch this host (or <target>).
   pull [--branch <name>]     git-pull the nixos-configs repo (default: master).
 
 Run 'nixctl <command> --help' where supported.
@@ -65,7 +65,7 @@ EOF
   return 1
 }
 
-rebuild() {
+switch() {
   local target
   if [ "$#" -gt 0 ] && [ "${1:0:1}" != "-" ]; then
     target="$1"; shift
@@ -76,7 +76,7 @@ rebuild() {
   repo=$(find_repo) || exit 1
 
   if [ "$(id -u)" -ne 0 ]; then
-    exec sudo --preserve-env=HOME,NIXOS_CONFIGS_DIR "$0" rebuild "$target" "$@"
+    exec sudo --preserve-env=HOME,NIXOS_CONFIGS_DIR "$0" switch "$target" "$@"
   fi
   exec nixos-rebuild switch --flake "$repo#$target" "$@"
 }
@@ -107,7 +107,7 @@ pull() {
 case "${1:-}" in
   ""|-h|--help|help) usage ;;
   info)      info ;;
-  rebuild)   shift; rebuild "$@" ;;
+  switch)    shift; switch "$@" ;;
   pull)      shift; pull "$@" ;;
   *)         echo "nixctl: unknown subcommand: $1" >&2; usage >&2; exit 1 ;;
 esac
