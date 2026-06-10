@@ -22,21 +22,17 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
   exec tmux attach -t "$SESSION"
 fi
 
-# A detached session has no client to size against, so tmux defaults to 80x24
-# and the split is laid out at that size — it only repaints full-screen after
-# the first resize/keypress once attached. Pass the real console dimensions so
-# the layout is correct from the first frame.
-size=()
-cols="$(tput cols 2>/dev/null || echo 0)"
-lines="$(tput lines 2>/dev/null || echo 0)"
-if [ "$cols" -gt 0 ] && [ "$lines" -gt 0 ]; then
-  size=(-x "$cols" -y "$lines")
-fi
-
-# new-session's initial pane is a login shell — that's the left/CLI pane.
-tmux new-session -d -s "$SESSION" "${size[@]}"
-# Split side-by-side (-h); the new (right) pane runs the dashboard.
-tmux split-window -h -l 50% -t "$SESSION" 'installer-dashboard'
-# Land the operator on the left/CLI pane.
-tmux select-pane -L -t "$SESSION"
-exec tmux attach -t "$SESSION"
+# Create the session ATTACHED in a single invocation (no `-d`), then split.
+#
+# Why not new-session -d + attach: a detached session has no client to size
+# against, so tmux lays it out at the default 80x24; the later `attach` only
+# adopts the real console size on the first SIGWINCH (your first keystroke) —
+# hence the small, wrapping window until you type. Attaching directly makes
+# tmux read the true terminal size up front, exactly like a normal `tmux`
+# launch, which is why an interactive tmux never shows this glitch.
+#
+# The initial pane is a login shell = the LEFT/CLI pane. `split-window -h -d`
+# adds the dashboard to the RIGHT without stealing focus (`-d`), so the
+# operator lands on the left pane.
+exec tmux new-session -s "$SESSION" \; \
+  split-window -h -d -l 50% installer-dashboard
