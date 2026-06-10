@@ -35,7 +35,7 @@ let
   # above), so the check has nothing useful to add.
   nixctl = pkgs.writeShellApplication {
     name = "nixctl";
-    runtimeInputs = [ pkgs.util-linux ];   # for `column`
+    runtimeInputs = [ pkgs.util-linux pkgs.git ];   # `column` (util-linux) + `pull`
     excludeShellChecks = [ "SC1090" ];
     text = builtins.readFile ./nixctl.sh;
   };
