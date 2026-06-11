@@ -125,6 +125,64 @@ incus snapshot create web01 pre-upgrade
 incus snapshot restore web01 pre-upgrade
 ```
 
+## Clustering (`orion-1`)
+
+Cluster membership is defined in **one place** — [lib/incus-clusters.nix](lib/incus-clusters.nix):
+
+```nix
+{
+  orion-1 = { seed = "iris"; members = [ "iris" "pleiades" ]; };
+}
+```
+
+The incus module derives each host's role from this map: the **seed** (`iris`)
+defines the cluster-wide pools/networks/profiles and bootstraps the cluster; a
+**member** (`pleiades`) inherits that config when it joins. Each node's cluster
+address is read from its own `my.network.static.address` (no duplicated IPs).
+The resolved topology is written to `/etc/incus-cluster.json` and surfaced by the
+`incus-cluster` helper ([scripts/incus-cluster](scripts/incus-cluster)).
+
+**Pull a node out:** `my.services.incus.cluster.enable = false;` in its
+`hosts/<host>/default.nix` (reverts to a standalone daemon on `:8443`); or
+`incus-cluster leave` to remove a live member.
+
+### Why a helper instead of pure preseed
+
+Incus join tokens are **single-use and expire (~3h)**, the trust-password was
+removed, and the NixOS preseed is **one-shot** (first init only). So the join
+step is inherently imperative. The helper keeps it driven from the central
+topology — it mints a fresh token on the seed over SSH at join time, so there
+are no token secrets to commit or rotate.
+
+### Bring up the cluster
+
+```bash
+# On the seed (iris) — non-destructive, keeps existing data:
+sudo incus-cluster enable
+incus-cluster status                 # topology + `incus cluster list`
+
+# On a member (pleiades) — ONE-TIME, DESTRUCTIVE (wipes local incus):
+sudo incus-cluster join              # SSHes the seed for a token, resets, joins
+```
+
+`incus-cluster token <member>` mints a token by hand if you want to join a node
+manually. Per-member storage source (`rpool/incus`) and the `vlan2` trunk are
+supplied automatically as `member_config` at join, from the descriptor.
+
+### Caveats
+
+- **Quorum / HA.** A 2-node cluster has **no fault tolerance** — losing either
+  member stalls the cluster DB (Incus uses Raft; majority of 2 is 2). `pleiades`
+  is a come-and-go laptop, so until a **3rd stable node** exists, run `iris` as a
+  healthy 1-node cluster and treat `pleiades` as an optional guest. A laptop that
+  *vanishes* (vs. a graceful `incus-cluster leave`) strands quorum until it
+  returns or you `incus cluster remove --force` it.
+- **Join is destructive.** `incus-cluster join` wipes the joiner's local Incus
+  (instances/images/profiles). `incus export` anything worth keeping first.
+- **`iris` has no VLAN 2 trunk.** `iris` has no `dong0.2` subif, so its `vlan2`
+  bridge carries nothing locally. It still clusters fine; give it its own trunk
+  (and set `my.services.incus.vlan2Trunk`) when VLAN 2 instances need to run there.
+
 ## Troubleshooting
 
 **Instance has no IPv4 after first boot.**

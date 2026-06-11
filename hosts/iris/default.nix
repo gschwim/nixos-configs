@@ -24,6 +24,11 @@
     nameservers  = [ "172.16.1.253" ];
   };
 
+  networking.vlans."enp3s0.2" = {
+    id = 2;
+    interface = "enp3s0";
+  };
+
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.services.incus.enable = true;
 

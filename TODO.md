@@ -2,6 +2,21 @@
 
 ## Fleet management gaps
 
+### Document every helper/command in one place
+
+We've accumulated a pile of helper commands and scripts; their docs are
+scattered (some inline in headers, some in [INCUS.md](INCUS.md), some nowhere).
+Audit all of them and ensure each is documented in a central place (e.g. a
+"Commands" section in [README.md](README.md) or a dedicated doc), with a
+one-line purpose + usage and a link to source:
+
+- `incus-launch` ([scripts/incus-launch.sh](scripts/incus-launch.sh)) — documented in INCUS.md.
+- `incus-cluster` ([scripts/incus-cluster](scripts/incus-cluster)) — documented in INCUS.md.
+- `nixctl` ([modules/system-info/nixctl.sh](modules/system-info/nixctl.sh)) — `info` / `switch` / `pull`.
+- `installer-console` / `installer-dashboard` ([scripts/](scripts/)) — installer ISO console UX.
+- `makeiso` ([scripts/makeiso.sh](scripts/makeiso.sh)) — build/flash the installer ISO.
+- `gen-host-key`, `install-host`, `new-host`, `provision-user-key`, `trust-ssh-ca` ([scripts/](scripts/)).
+
 ### Incus preseed reconciliation
 
 `virtualisation.incus.preseed` is one-shot — `incus admin init --preseed` initializes a fresh incus but does not reconcile against existing state. When the preseed in nix changes (e.g., a network or profile is added, removed, or modified) and `nixos-rebuild switch` is run, the *file* updates but the *live incus state* stays stale. Manual sync via `incus network edit` / `incus profile edit` / `incus network unset` is currently required after every relevant rebuild.

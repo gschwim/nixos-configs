@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# incus-cluster — manage this host's Incus cluster membership from the central
+# topology (lib/incus-clusters.nix), surfaced by the NixOS incus module at
+# /etc/incus-cluster.json.
+#
+# Subcommands:
+#   incus-cluster status            Show the topology descriptor + cluster list.
+#   incus-cluster enable            SEED only: `incus cluster enable` in place
+#                                   (non-destructive; keeps existing data).
+#   incus-cluster token <member>    Mint a fresh join token (run on/against the
+#                                   seed). Tokens are single-use and short-lived.
+#   incus-cluster join [--seed H]   MEMBER, ONE-TIME DESTRUCTIVE: SSH the seed
+#                                   to mint a token, reset local Incus, and
+#                                   re-init this node as a cluster member.
+#   incus-cluster leave             Gracefully remove this host from the cluster.
+#
+# Why a helper and not pure preseed: Incus join tokens are single-use and
+# expire (~3h) and the NixOS preseed is one-shot, so the join step is inherently
+# imperative. Everything it needs (seed, addresses, per-member config) comes
+# from the central topology via the descriptor — no per-host token secrets.
+#
+# SSH: the token is minted on the seed over SSH as your admin user (the one
+# carrying the CA-signed key), defaulting to $SUDO_USER then $USER. Override
+# with INCUS_CLUSTER_SSH_USER. If that user can't reach the Incus socket on the
+# seed, set INCUS_CLUSTER_REMOTE="sudo " to prefix the remote incus call.
+
+set -euo pipefail
+
+DESC=/etc/incus-cluster.json
+SSH_USER="${INCUS_CLUSTER_SSH_USER:-${SUDO_USER:-$USER}}"
+REMOTE_PREFIX="${INCUS_CLUSTER_REMOTE:-}"
+
+die() { echo "incus-cluster: $*" >&2; exit 1; }
+
+need_desc() {
+  [ -r "$DESC" ] || die "$DESC not found — this host isn't configured for clustering (set my.services.incus.cluster.enable)."
+}
+
+d() { jq -r "$1" "$DESC"; }
+
+# True when this daemon is already a cluster member.
+clustered() {
+  incus query /1.0/cluster 2>/dev/null | jq -e '.enabled == true' >/dev/null 2>&1
+}
+
+# Pull the (long base64) token out of `incus cluster add` output.
+extract_token() { grep -oE '[A-Za-z0-9+/=_-]{60,}' | tail -n1; }
+
+cmd_status() {
+  need_desc
+  echo "== topology ($DESC) =="
+  jq . "$DESC"
+  echo
+  if clustered; then
+    echo "== incus cluster list =="
+    incus cluster list
+  else
+    echo "(this node is not yet a cluster member)"
+  fi
+}
+
+cmd_enable() {
+  need_desc
+  local role name
+  role=$(d .role); name=$(d .name)
+  [ "$role" = "seed" ] || die "this host is role '$role' of cluster '$name', not the seed — run 'join' instead."
+  if clustered; then
+    echo "incus-cluster: '$name' already enabled here; nothing to do."
+    incus cluster list
+    return 0
+  fi
+  echo "incus-cluster: enabling cluster '$name' on seed $(hostname) ($(d .address))…"
+  incus cluster enable "$(hostname)"
+  incus cluster list
+}
+
+cmd_token() {
+  need_desc
+  local member="${1:-}"
+  [ -n "$member" ] || die "usage: incus-cluster token <member>"
+  clustered || die "not a cluster yet — run 'incus-cluster enable' on the seed first."
+  incus cluster add "$member" | extract_token
+}
+
+cmd_join() {
+  need_desc
+  local seed_override=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --seed)   seed_override="${2:?--seed needs a host}"; shift 2 ;;
+      --seed=*) seed_override="${1#*=}"; shift ;;
+      *) die "join: unknown argument: $1" ;;
+    esac
+  done
+
+  local role name self self_addr seed seed_addr
+  role=$(d .role); name=$(d .name); self=$(hostname)
+  self_addr=$(d .address)
+  seed=${seed_override:-$(d .seed)}
+  seed_addr=$(jq -r --arg s "$seed" '.members[$s] // empty' "$DESC")
+  [ -n "$seed_addr" ] || die "no address for seed '$seed' in $DESC (use --seed or fix the topology)."
+  [ "$seed" != "$self" ] || die "this host IS the seed of '$name' — run 'incus-cluster enable', not 'join'."
+
+  cat <<EOF
+About to JOIN cluster '$name' via seed $seed ($seed_addr).
+
+  !!! THIS WIPES THIS NODE'S LOCAL INCUS STATE !!!
+  All local instances/images/profiles on $self are destroyed; the node then
+  adopts the cluster's configuration. Export anything worth keeping first
+  (incus export ...).
+
+  this node : $self ($self_addr:8443)
+  token via : ssh $SSH_USER@$seed_addr ${REMOTE_PREFIX}incus cluster add $self
+EOF
+  read -rp "Type the cluster name to confirm ($name): " ans
+  [ "$ans" = "$name" ] || die "confirmation mismatch — aborted, nothing changed."
+
+  echo "==> Minting a fresh join token on the seed…"
+  local token
+  token=$(ssh "$SSH_USER@$seed_addr" "${REMOTE_PREFIX}incus cluster add $self" | extract_token)
+  [ -n "$token" ] || die "failed to obtain a join token from $seed (check SSH access and that the seed is clustered)."
+
+  # member_config (storage source, vlan2 trunk, …) straight from the descriptor.
+  local member_yaml
+  member_yaml=$(jq -r '
+    .memberConfig[]
+    | "    - entity: \(.entity)\n      name: \(.name)\n      key: \(.key)\n      value: \"\(.value)\""
+  ' "$DESC")
+
+  echo "==> Resetting local Incus so it can re-init as a member (needs root)…"
+  sudo systemctl stop incus.service incus.socket || true
+  # Move the local database aside rather than deleting outright, so a botched
+  # join can be inspected. The zfs source dataset (cfg.storagePool) is left in
+  # place; incus reuses it via the member_config source on join.
+  if [ -d /var/lib/incus/database ]; then
+    sudo mv /var/lib/incus/database "/var/lib/incus/database.pre-join.$(date +%s)"
+  fi
+  sudo systemctl start incus.socket incus.service
+  # Give the socket a moment to come back.
+  for _ in 1 2 3 4 5; do incus info >/dev/null 2>&1 && break; sleep 1; done
+
+  echo "==> Joining the cluster…"
+  sudo incus admin init --preseed <<EOF
+cluster:
+  enabled: true
+  server_name: $self
+  server_address: $self_addr:8443
+  cluster_token: $token
+  member_config:
+$member_yaml
+EOF
+
+  echo "==> Joined. Cluster members:"
+  incus cluster list
+}
+
+cmd_leave() {
+  need_desc
+  local self name
+  self=$(hostname); name=$(d .name)
+  clustered || die "not a cluster member; nothing to leave."
+  read -rp "Remove $self from cluster '$name'? (y/N) " ans
+  case "$ans" in [Yy]*) ;; *) echo "Aborted."; exit 0 ;; esac
+  incus cluster remove "$self"
+  echo "incus-cluster: removed $self from '$name'."
+}
+
+case "${1:-status}" in
+  status)     shift; cmd_status "$@" ;;
+  enable)     shift; cmd_enable "$@" ;;
+  token)      shift; cmd_token "$@" ;;
+  join)       shift; cmd_join "$@" ;;
+  leave)      shift; cmd_leave "$@" ;;
+  -h|--help)  sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *)          die "unknown subcommand: $1 (try: status, enable, token, join, leave)" ;;
+esac

@@ -1,6 +1,53 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 let
   cfg = config.my.services.incus;
+
+  # Central cluster topology (single source of truth). See lib/incus-clusters.nix.
+  clusters = import ../../lib/incus-clusters.nix;
+  hostName = config.networking.hostName;
+
+  # Which cluster (if any) lists this host as a member.
+  clusterNameAuto =
+    lib.findFirst (n: lib.elem hostName clusters.${n}.members) null
+      (lib.attrNames clusters);
+
+  # --- derived cluster facts (after options resolve) -----------------------
+  clusterEnabled = cfg.cluster.enable;
+  selfAddr       = cfg.cluster.address;
+  isSeed         = cfg.cluster.seed;
+
+  # Concrete, reachable cluster address when clustered; wildcard otherwise.
+  httpsAddr = if clusterEnabled then "${selfAddr}:8443" else ":8443";
+
+  # The seed (or a standalone host) DEFINES the cluster-wide pools/networks/
+  # profiles; a plain member inherits them on join, so it must not preseed a
+  # conflicting standalone set.
+  defineClusterConfig = (!clusterEnabled) || isSeed;
+
+  # Read another member's cluster address straight from its own config, so IPs
+  # live in exactly one place (the host's my.network.static.address). Safe from
+  # infinite recursion: static.address is a plain literal independent of this
+  # incus module, so forcing it does not pull incus config back in.
+  memberAddr = h: inputs.self.nixosConfigurations.${h}.config.my.network.static.address;
+
+  # Per-member keys that must be supplied at join time (cluster-wide pools and
+  # networks define everything else). Storage source is per-node; vlan2's
+  # external trunk is per-node (and may be absent on some hosts).
+  memberConfig =
+    [ { entity = "storage-pool"; name = "default"; key = "source"; value = cfg.storagePool; } ]
+    ++ lib.optional (cfg.vlan2Trunk != "")
+         { entity = "network"; name = "vlan2"; key = "bridge.external_interfaces"; value = cfg.vlan2Trunk; };
+
+  # The descriptor surfaced at /etc/incus-cluster.json for the helper + operator.
+  clusterDescriptor = name: {
+    inherit name;
+    seed         = clusters.${name}.seed;
+    role         = if isSeed then "seed" else "member";
+    address      = selfAddr;
+    members      = lib.genAttrs clusters.${name}.members memberAddr;
+    memberConfig = memberConfig;
+    storagePool  = cfg.storagePool;
+  };
 in {
   options.my.services.incus = {
     enable = lib.mkEnableOption "Incus virtualisation (host)";
@@ -10,6 +57,53 @@ in {
       default     = "rpool/incus";
       description = "ZFS dataset used as the 'default' Incus storage pool source.";
     };
+
+    vlan2Trunk = lib.mkOption {
+      type        = lib.types.str;
+      default     = "dong0.2";
+      description = ''
+        Host interface enslaved into the 'vlan2' L2-passthrough bridge. Empty
+        string = none (the bridge carries no external port on this host — e.g.
+        a node without a VLAN 2 trunk subif). Also supplied as per-member
+        join config when clustering.
+      '';
+    };
+
+    cluster = {
+      enable = lib.mkOption {
+        type        = lib.types.bool;
+        default     = clusterNameAuto != null;
+        description = ''
+          Participate in an Incus cluster. Defaults true when this host is
+          listed in lib/incus-clusters.nix. Set false in a host's default.nix
+          to pull it out (reverts to a standalone daemon on :8443).
+        '';
+      };
+
+      name = lib.mkOption {
+        type        = lib.types.nullOr lib.types.str;
+        default     = clusterNameAuto;
+        description = "Cluster this host belongs to (derived from lib/incus-clusters.nix).";
+      };
+
+      seed = lib.mkOption {
+        type        = lib.types.bool;
+        default     = clusterNameAuto != null && clusters.${clusterNameAuto}.seed == hostName;
+        description = ''
+          Whether this host is the cluster seed (the bootstrap node that runs
+          `incus cluster enable`). Derived from lib/incus-clusters.nix.
+        '';
+      };
+
+      address = lib.mkOption {
+        type        = lib.types.str;
+        default     = config.my.network.static.address;
+        description = ''
+          This node's cluster address (without port). Defaults to its static
+          IPv4 address; the daemon advertises <address>:8443 to peers.
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -18,9 +112,9 @@ in {
 
       preseed = {
         config = {
-          "core.https_address" = ":8443";
+          "core.https_address" = httpsAddr;
         };
-
+      } // lib.optionalAttrs defineClusterConfig {
         storage_pools = [
           {
             name   = "default";
@@ -52,9 +146,9 @@ in {
             };
           }
           {
-            # Pure L2 pass-through for VLAN 2. The bridge enslaves dong0.2
-            # (the tagged trunk subif declared on the host) and carries NO
-            # IP, NO DHCP, NO NAT. Containers/VMs on this bridge sit on the
+            # Pure L2 pass-through for VLAN 2. The bridge enslaves the host's
+            # tagged trunk subif (cfg.vlan2Trunk, default dong0.2) and carries
+            # NO IP, NO DHCP, NO NAT. Containers/VMs on this bridge sit on the
             # same L2 segment as the rest of VLAN 2 and reach the upstream
             # gateway (172.16.0.254) directly.
             #
@@ -64,9 +158,10 @@ in {
             name = "vlan2";
             type = "bridge";
             config = {
-              "bridge.external_interfaces" = "dong0.2";
-              "ipv4.address"               = "none";
-              "ipv6.address"               = "none";
+              "ipv4.address" = "none";
+              "ipv6.address" = "none";
+            } // lib.optionalAttrs (cfg.vlan2Trunk != "") {
+              "bridge.external_interfaces" = cfg.vlan2Trunk;
             };
           }
         ];
@@ -143,17 +238,41 @@ in {
           { name = "mem-8GB";  config."limits.memory" = "8GiB";  }
           { name = "mem-16GB"; config."limits.memory" = "16GiB"; }
         ];
+      } // lib.optionalAttrs (clusterEnabled && isSeed) {
+        # A freshly installed seed auto-bootstraps the cluster on first init.
+        # No-op on an already-initialized seed (preseed is one-shot) — there
+        # the `incus-cluster enable` helper performs the in-place enable.
+        cluster = {
+          enabled     = true;
+          server_name = hostName;
+        };
       };
+    };
+
+    # Surface the central topology for the `incus-cluster` helper + operators.
+    environment.etc."incus-cluster.json" = lib.mkIf clusterEnabled {
+      text = builtins.toJSON (clusterDescriptor cfg.cluster.name);
     };
 
     # Fleet-wide launch helper for L2-passthrough networks (no DHCP on the
     # bridge). Generates MAC-pinned cloud-init network-config from the
     # network metadata baked into the script. Source: scripts/incus-launch.sh.
+    #
+    # incus-cluster: drives the imperative cluster steps (enable/token/join/
+    # leave) from the central topology. Source: scripts/incus-cluster.
     environment.systemPackages = [
       (pkgs.writeShellApplication {
         name = "incus-launch";
         runtimeInputs = with pkgs; [ incus coreutils ];
         text = builtins.readFile ../../scripts/incus-launch.sh;
+      })
+      (pkgs.writeShellApplication {
+        name = "incus-cluster";
+        runtimeInputs = with pkgs; [ incus openssh coreutils jq gnugrep systemd ];
+        # SC2029: the remote `incus cluster add <self>` is built from local
+        # values we intend to expand client-side before sending — that's the point.
+        excludeShellChecks = [ "SC2029" ];
+        text = builtins.readFile ../../scripts/incus-cluster;
       })
     ];
 
