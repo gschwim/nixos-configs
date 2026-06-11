@@ -129,12 +129,13 @@ EOF
 
   echo "==> Resetting local Incus so it can re-init as a member (needs root)…"
   sudo systemctl stop incus.service incus.socket || true
-  # Move the local database aside rather than deleting outright, so a botched
-  # join can be inspected. The zfs source dataset (cfg.storagePool) is left in
-  # place; incus reuses it via the member_config source on join.
-  if [ -d /var/lib/incus/database ]; then
-    sudo mv /var/lib/incus/database "/var/lib/incus/database.pre-join.$(date +%s)"
-  fi
+  # Move ALL of /var/lib/incus aside so incus starts truly blank. The ZFS
+  # source dataset (cfg.storagePool, e.g. rpool/incus) is a ZFS path — it
+  # lives outside /var/lib/incus and is NOT touched here; incus reuses it via
+  # the member_config source on join.
+  local ts; ts=$(date +%s)
+  sudo mv /var/lib/incus "/var/lib/incus.pre-join.${ts}"
+  sudo mkdir -p /var/lib/incus
   sudo systemctl start incus.socket incus.service
   # Give the socket a moment to come back.
   for _ in 1 2 3 4 5; do incus info >/dev/null 2>&1 && break; sleep 1; done
