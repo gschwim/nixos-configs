@@ -272,7 +272,7 @@ in {
     environment.systemPackages = [
       (pkgs.writeShellApplication {
         name = "incus-launch";
-        runtimeInputs = with pkgs; [ incus coreutils ];
+        runtimeInputs = with pkgs; [ incus coreutils openssl ];
         text = builtins.readFile ../../scripts/incus-launch.sh;
       })
       (pkgs.writeShellApplication {

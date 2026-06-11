@@ -45,14 +45,13 @@ NET_GW[vlan2]="172.16.0.254"; NET_DNS[vlan2]="172.16.1.253"; NET_PREFIX[vlan2]="
 
 # ---- helpers ---------------------------------------------------------------
 
-# Deterministic MAC from (instance-name, network-name). 0x02 prefix marks
-# the MAC as locally-administered + unicast. Same (name, net) always
-# yields the same MAC, so re-launching the same instance name keeps its
-# upstream ARP cache entry valid.
+# Random locally-administered unicast MAC. 0x02 prefix = LA+unicast.
+# Stored in the incus instance config at launch — travels with the
+# instance on export/import/move. Not re-derived on re-launch.
 gen_mac() {
-  local h
-  h=$(printf '%s|%s' "$1" "$2" | sha256sum | cut -c1-10)
-  printf '02:%s:%s:%s:%s:%s' "${h:0:2}" "${h:2:2}" "${h:4:2}" "${h:6:2}" "${h:8:2}"
+  printf '02:%s:%s:%s:%s:%s' \
+    "$(openssl rand -hex 1)" "$(openssl rand -hex 1)" "$(openssl rand -hex 1)" \
+    "$(openssl rand -hex 1)" "$(openssl rand -hex 1)"
 }
 
 die() { echo "ERROR: $*" >&2; exit 2; }
