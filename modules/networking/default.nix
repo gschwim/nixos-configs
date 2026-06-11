@@ -17,7 +17,7 @@ let
   # Incus bridges + container/VM virtual ifaces. NM has no business touching
   # any of these; incus and its DHCP server own them.
   incusIfaces = lib.optionals config.my.services.incus.enable
-    (map (n: n.name) config.virtualisation.incus.preseed.networks);
+    (map (n: n.name) (config.virtualisation.incus.preseed.networks or []));
 
   # Always-unmanaged glob patterns when NM is on (container/VM dynamic ifaces).
   alwaysUnmanagedGlobs = [

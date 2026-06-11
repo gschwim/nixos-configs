@@ -2,6 +2,16 @@
 
 ## Fleet management gaps
 
+### deploy-rs push-from-workstation
+
+Plan written at `.claude/plans/ok-next-on-the-sleepy-harbor.md`. Summary:
+- Add `deploy-rs` flake input (follows nixpkgs)
+- Add `deploy` output with iris + pleiades nodes, `remoteBuild = true` (avoids Mac→Linux cross-build); hostnames read from `my.network.static.address`
+- Add `checks` output for schema validation; `devShells` for both darwin arches so `nix develop` gives the `deploy` CLI
+- No host config changes needed — consumes existing `nixosConfigurations` as-is
+
+Usage: `deploy .#iris`, `deploy .#pleiades`, `deploy .` (all). Auto-rollback on activation failure.
+
 ### Document every helper/command in one place
 
 We've accumulated a pile of helper commands and scripts; their docs are
@@ -86,3 +96,12 @@ Hard-coded "Greg Schwimer" and "7e7":
 - [starting-configs/configuration.nix.old](starting-configs/configuration.nix.old)
 
 **Risk:** none. Safe to delete the entire directory.
+
+# Misc
+
+## install-host.sh safety checks
+
+The script should detect if it is installing against the installer or base image or a live system to be extra sure it doesn't clobber a running system in error. Allow --force to override.
+
+##  install-host.sh 
+

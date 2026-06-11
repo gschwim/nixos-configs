@@ -19,11 +19,6 @@ let
   # Concrete, reachable cluster address when clustered; wildcard otherwise.
   httpsAddr = if clusterEnabled then "${selfAddr}:8443" else ":8443";
 
-  # The seed (or a standalone host) DEFINES the cluster-wide pools/networks/
-  # profiles; a plain member inherits them on join, so it must not preseed a
-  # conflicting standalone set.
-  defineClusterConfig = (!clusterEnabled) || isSeed;
-
   # Read another member's cluster address straight from its own config, so IPs
   # live in exactly one place (the host's my.network.static.address). Safe from
   # infinite recursion: static.address is a plain literal independent of this
@@ -123,7 +118,7 @@ in {
         config = {
           "core.https_address" = httpsAddr;
         };
-      } // lib.optionalAttrs defineClusterConfig {
+
         storage_pools = [
           {
             name   = "default";
