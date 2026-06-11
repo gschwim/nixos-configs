@@ -59,19 +59,13 @@
   # ifaces with a declared ipv4.addresses; dong0.2 has none, so name it.
   my.networking.networkmanager.unmanaged = [ "interface-name:dong0.2" ];
 
-  # Pin incus start order behind dong0.2-netdev. Without this, on cold boot
-  # incus.service can win the race, create the vlan2 bridge with no enslaved
-  # port, and never retry — leaving every container/VM on net-vlan2 with no
-  # path to the upstream VLAN until someone restarts incus by hand.
-  systemd.services.incus = {
-    after = [ "dong0.2-netdev.service" ];
-    wants = [ "dong0.2-netdev.service" ];
-  };
-
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;
   my.services.incus.enable     = true;       # flip off when laptop leaves the cluster
+  # This host's VLAN 2 trunk. The incus module enslaves it into the vlan2
+  # bridge and pins incus to start after dong0.2-netdev (cold-boot race fix).
+  my.services.incus.vlan2Trunk = "dong0.2";
   # preventSleep is on by default via my.host.role = "server" above.
 
   system.stateVersion = "25.11";

@@ -31,6 +31,9 @@
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.services.incus.enable = true;
+  # This host's VLAN 2 trunk. The incus module enslaves it into the vlan2
+  # bridge and pins incus to start after enp3s0.2-netdev (cold-boot race fix).
+  my.services.incus.vlan2Trunk = "enp3s0.2";
 
   system.stateVersion = "25.11";
 }

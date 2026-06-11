@@ -60,12 +60,21 @@ in {
 
     vlan2Trunk = lib.mkOption {
       type        = lib.types.str;
-      default     = "dong0.2";
+      default     = "";
+      example     = "dong0.2";
       description = ''
-        Host interface enslaved into the 'vlan2' L2-passthrough bridge. Empty
-        string = none (the bridge carries no external port on this host — e.g.
-        a node without a VLAN 2 trunk subif). Also supplied as per-member
-        join config when clustering.
+        The host's tagged VLAN 2 trunk subif, enslaved into the 'vlan2'
+        L2-passthrough bridge. Set this per host to the local interface name
+        (e.g. "dong0.2" on pleiades, "enp3s0.2" on iris) — the network is
+        otherwise defined uniformly across the fleet.
+
+        Empty string (the default) = no trunk on this host: the 'vlan2' bridge
+        is created but carries no external port (inert locally), and no start-
+        order edge is added. Pair this option with a matching
+        `networking.vlans."<trunk>"` declaration on the host.
+
+        When set, the module also pins incus to start after the trunk's netdev
+        unit, and supplies the value as per-member join config when clustering.
       '';
     };
 
@@ -147,7 +156,7 @@ in {
           }
           {
             # Pure L2 pass-through for VLAN 2. The bridge enslaves the host's
-            # tagged trunk subif (cfg.vlan2Trunk, default dong0.2) and carries
+            # tagged trunk subif (cfg.vlan2Trunk, set per host) and carries
             # NO IP, NO DHCP, NO NAT. Containers/VMs on this bridge sit on the
             # same L2 segment as the rest of VLAN 2 and reach the upstream
             # gateway (172.16.0.254) directly.
@@ -275,6 +284,17 @@ in {
         text = builtins.readFile ../../scripts/incus-cluster;
       })
     ];
+
+    # Cold-boot race fix, derived uniformly from the host's trunk: without
+    # this, incus.service can win the race against the VLAN netdev, create the
+    # vlan2 bridge with no enslaved port, and never retry — leaving every
+    # net-vlan2 instance with no path to the upstream VLAN until incus is
+    # restarted by hand. Pin incus after the trunk's <iface>-netdev.service.
+    # (Assumes vlan2Trunk is a declared `networking.vlans."<trunk>"` subif.)
+    systemd.services.incus = lib.mkIf (cfg.vlan2Trunk != "") {
+      after = [ "${cfg.vlan2Trunk}-netdev.service" ];
+      wants = [ "${cfg.vlan2Trunk}-netdev.service" ];
+    };
 
     networking.firewall.allowedTCPPorts = [ 8443 ];
     # vlan2 deliberately NOT trusted: the bridge has an IP on VLAN 2, so
