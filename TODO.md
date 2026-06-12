@@ -12,6 +12,26 @@ Plan written at `.claude/plans/ok-next-on-the-sleepy-harbor.md`. Summary:
 
 Usage: `deploy .#iris`, `deploy .#pleiades`, `deploy .` (all). Auto-rollback on activation failure.
 
+### Optional: `null` boot preseed for cluster-only members
+
+Cluster members currently get the **full** standalone preseed (pool + networks +
+profiles) so they're functional standalone and can be **joined to a cluster
+after running standalone** — a required workflow. The cost: on join, the helper
+must destructively wipe that standalone state (empty the ZFS pool, wipe
+`/var/lib/incus`, kill leftover dnsmasq, `ip link delete` the leftover
+incusbr0/prod/vlan2 bridges — see `cmd_join` in
+[scripts/incus-cluster](scripts/incus-cluster)).
+
+A node that will **only ever** be a cluster member (never standalone) could
+instead get `virtualisation.incus.preseed = null`: it boots uninitialized, with
+no standalone pool/bridges to wipe, so the join needs no destructive reset.
+
+Decide whether to add a per-host opt-in (e.g.
+`my.services.incus.cluster.standaloneCapable = false`) that switches a member to
+the `null`-preseed path. **Not a default** — it sacrifices standalone use and
+join-after-standalone, both of which we rely on. Keep the destructive reset path
+as the supported general case regardless.
+
 ### Document every helper/command in one place
 
 We've accumulated a pile of helper commands and scripts; their docs are
