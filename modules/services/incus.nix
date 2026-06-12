@@ -25,11 +25,16 @@ let
   # incus module, so forcing it does not pull incus config back in.
   memberAddr = h: inputs.self.nixosConfigurations.${h}.config.my.network.static.address;
 
-  # Per-member keys that must be supplied at join time (cluster-wide pools and
-  # networks define everything else). Storage source is per-node; vlan2's
-  # external trunk is per-node (and may be absent on some hosts).
+  # Per-member keys that MUST all be supplied at join time, exactly as incus's
+  # interactive `incus admin init` prompts for them — an incomplete set breaks
+  # the whole "initialize storage pools and networks" join phase. For the ZFS
+  # 'default' pool that's BOTH `source` and `zfs.pool_name` (incus treats them
+  # as distinct member-specific keys, even when equal). vlan2's external trunk
+  # is per-node too (and absent on hosts without a trunk).
   memberConfig =
-    [ { entity = "storage-pool"; name = "default"; key = "source"; value = cfg.storagePool; } ]
+    [ { entity = "storage-pool"; name = "default"; key = "source";        value = cfg.storagePool; }
+      { entity = "storage-pool"; name = "default"; key = "zfs.pool_name"; value = cfg.storagePool; }
+    ]
     ++ lib.optional (cfg.vlan2Trunk != "")
          { entity = "network"; name = "vlan2"; key = "bridge.external_interfaces"; value = cfg.vlan2Trunk; };
 
