@@ -150,6 +150,17 @@ EOF
   pool=$(jq -r '.memberConfig[] | select(.entity == "storage-pool" and .key == "source") | .value' "$DESC" | head -1)
   [ -n "$pool" ] && [ "$pool" != "null" ] || die "could not determine ZFS storage pool source from $DESC"
 
+  # The cluster's managed bridge names (from the seed — incusbr0/prod/vlan2…).
+  # We delete any LEFTOVER local devices with these names before joining: a
+  # stale unmanaged bridge from this node's prior standalone preseed makes the
+  # join's network creation roll back and fail with "Network not found". Host
+  # trunk subifs (dong0.2, enp3s0.2) are type=vlan/managed=NO on the seed, so
+  # they never appear here and are never touched. SSH is already proven working
+  # (we just minted the token over it).
+  local cluster_bridges
+  cluster_bridges=$(_ssh "$SSH_USER@$seed_addr" "${REMOTE_PREFIX}incus network list --format csv" 2>/dev/null \
+    | awk -F, '$2 == "bridge" { print $1 }')
+
   echo "==> Resetting local Incus so it can re-init as a member (needs root)…"
   echo "  incus state dir : /var/lib/incus"
   echo "  ZFS pool source : $pool"
@@ -162,6 +173,20 @@ EOF
   #    pre-create pools/networks before our join preseed (conflict). Mask it for
   #    this boot; unmasked again once the join succeeds.
   sudo systemctl mask --runtime incus-preseed.service 2>/dev/null || true
+
+  # 2b. Kill leftover incus dnsmasq and delete the leftover incus bridge devices.
+  #     Stopping incus.service does NOT tear these down (the journal shows
+  #     dnsmasq "remains running" and the bridges survive until a reboot), and a
+  #     stale incusbr0 device makes the join fail with "Network not found". Only
+  #     the cluster's managed bridges are deleted; host trunks (dong0.2) are not.
+  sudo pkill -f 'dnsmasq.*var/lib/incus' 2>/dev/null || true
+  local br
+  for br in $cluster_bridges; do
+    if ip -br link show "$br" >/dev/null 2>&1; then
+      echo "    ip link delete $br"
+      sudo ip link delete "$br" 2>/dev/null || true
+    fi
+  done
 
   # 3. Unmount every incus mount, deepest-first, filtered by mountpoint PATH so
   #    we also sweep stale mounts left at /var/lib/incus.pre-join.* by earlier
