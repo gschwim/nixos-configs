@@ -130,10 +130,15 @@ EOF
   token=$(_ssh "$SSH_USER@$seed_addr" "${REMOTE_PREFIX}incus cluster add $self" | extract_token)
   [ -n "$token" ] || die "failed to obtain a join token from $seed (check SSH access and that the seed is clustered)."
 
-  # member_config (storage source, vlan2 trunk, …) straight from the descriptor.
+  # Join-time member_config: STORAGE POOLS ONLY. Per-member NETWORK keys (e.g.
+  # vlan2's bridge.external_interfaces) are applied AFTER join via `incus network
+  # set ... --target` (see below): incus 6.0.6's join network-init phase fails
+  # ("update local member network <X>: Network not found") when a network entry
+  # is present in the join member_config, even for an unrelated network. The
+  # --target route is the documented way to set per-member network keys anyway.
   local member_yaml
   member_yaml=$(jq -r '
-    .memberConfig[]
+    .memberConfig[] | select(.entity == "storage-pool")
     | "    - entity: \(.entity)\n      name: \(.name)\n      key: \(.key)\n      value: \"\(.value)\""
   ' "$DESC")
 
@@ -204,11 +209,29 @@ EOF
 )
   printf '%s\n' "$join_preseed" | grep -v cluster_token || true   # echo, token redacted
   if ! printf '%s\n' "$join_preseed" | sudo incus admin init --preseed; then
+    echo "---- last 40 lines of incus journal ----" >&2
+    sudo journalctl -u incus.service --no-pager -n 40 >&2 || true
+    echo "----------------------------------------" >&2
     die "incus admin init --preseed failed (see error above). Local state was reset; fix the cause and re-run 'incus-cluster join'."
   fi
 
   # Verify membership actually took before declaring success.
   clustered || die "join preseed ran without error but this node is NOT a cluster member (incus query /1.0/cluster shows disabled). Check the seed's 'incus cluster list'."
+
+  # Now that we're a member, apply per-member NETWORK keys via --target. These
+  # were deliberately kept out of the join member_config (see above). Restart
+  # incus afterward so the bridge actually enslaves the freshly-set trunk.
+  local applied_net=0 net key val
+  while IFS=$'\t' read -r net key val; do
+    [ -n "$net" ] || continue
+    echo "  incus network set $net $key=\"$val\" --target $self"
+    incus network set "$net" "$key" "$val" --target "$self"
+    applied_net=1
+  done < <(jq -r '.memberConfig[] | select(.entity == "network") | "\(.name)\t\(.key)\t\(.value)"' "$DESC")
+  if [ "$applied_net" -eq 1 ]; then
+    echo "  Restarting incus to enslave per-member trunk(s)…"
+    sudo systemctl restart incus.service
+  fi
 
   # Join succeeded — re-enable the preseed service. Future preseed runs (e.g.
   # after nixos-rebuild) update existing resources, a no-op for most keys.
