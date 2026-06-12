@@ -272,7 +272,7 @@ in {
       })
       (pkgs.writeShellApplication {
         name = "incus-cluster";
-        runtimeInputs = with pkgs; [ incus openssh coreutils jq gnugrep systemd ];
+        runtimeInputs = with pkgs; [ incus openssh coreutils jq gnugrep systemd psmisc util-linux zfs ];
         # SC2029: the remote `incus cluster add <self>` is built from local
         # values we intend to expand client-side before sending — that's the point.
         excludeShellChecks = [ "SC2029" ];

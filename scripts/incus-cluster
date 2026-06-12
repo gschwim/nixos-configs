@@ -32,6 +32,16 @@ REMOTE_PREFIX="${INCUS_CLUSTER_REMOTE:-}"
 
 die() { echo "incus-cluster: $*" >&2; exit 1; }
 
+# Run SSH as the invoking (non-root) user even when the script is called via
+# sudo — root's agent/keys won't carry the CA-signed user key the seed trusts.
+_ssh() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    sudo -u "$SUDO_USER" ssh "$@"
+  else
+    ssh "$@"
+  fi
+}
+
 need_desc() {
   [ -r "$DESC" ] || die "$DESC not found — this host isn't configured for clustering (set my.services.incus.cluster.enable)."
 }
@@ -117,7 +127,7 @@ EOF
 
   echo "==> Minting a fresh join token on the seed…"
   local token
-  token=$(ssh "$SSH_USER@$seed_addr" "${REMOTE_PREFIX}incus cluster add $self" | extract_token)
+  token=$(_ssh "$SSH_USER@$seed_addr" "${REMOTE_PREFIX}incus cluster add $self" | extract_token)
   [ -n "$token" ] || die "failed to obtain a join token from $seed (check SSH access and that the seed is clustered)."
 
   # member_config (storage source, vlan2 trunk, …) straight from the descriptor.
@@ -127,21 +137,62 @@ EOF
     | "    - entity: \(.entity)\n      name: \(.name)\n      key: \(.key)\n      value: \"\(.value)\""
   ' "$DESC")
 
+  # ZFS pool source (e.g. rpool/incus) the member will reuse. incus refuses a
+  # NON-EMPTY dataset as a pool source on join, so we empty it below.
+  local pool
+  pool=$(jq -r '.memberConfig[] | select(.entity == "storage-pool" and .key == "source") | .value' "$DESC" | head -1)
+  [ -n "$pool" ] && [ "$pool" != "null" ] || die "could not determine ZFS storage pool source from $DESC"
+
   echo "==> Resetting local Incus so it can re-init as a member (needs root)…"
-  sudo systemctl stop incus.service incus.socket || true
-  # Move ALL of /var/lib/incus aside so incus starts truly blank. The ZFS
-  # source dataset (cfg.storagePool, e.g. rpool/incus) is a ZFS path — it
-  # lives outside /var/lib/incus and is NOT touched here; incus reuses it via
-  # the member_config source on join.
-  local ts; ts=$(date +%s)
-  sudo mv /var/lib/incus "/var/lib/incus.pre-join.${ts}"
+  echo "  incus state dir : /var/lib/incus"
+  echo "  ZFS pool source : $pool"
+
+  # 1. Stop the daemon completely so nothing holds the pool/zvols open.
+  sudo systemctl stop incus.service incus.socket 2>/dev/null || true
+
+  # 2. incus-preseed.service is bound to incus.service (wantedBy + bindsTo) with
+  #    NO condition guard, so it re-runs on every incus start and would
+  #    pre-create pools/networks before our join preseed (conflict). Mask it for
+  #    this boot; unmasked again once the join succeeds.
+  sudo systemctl mask --runtime incus-preseed.service 2>/dev/null || true
+
+  # 3. Unmount every incus mount, deepest-first, filtered by mountpoint PATH so
+  #    we also sweep stale mounts left at /var/lib/incus.pre-join.* by earlier
+  #    attempts. awk exits 0 on no-match (grep would exit 1 and, under
+  #    `set -e -o pipefail`, silently kill the script right here).
+  local m
+  while IFS= read -r m; do
+    echo "    umount -l $m"
+    sudo umount -l "$m" 2>/dev/null || true
+  done < <(awk '$2 ~ "^/var/lib/incus" {print $2}' /proc/mounts | sort -r)
+
+  # 4. Free any process still holding a zvol (VM block device) open, then
+  #    destroy the pool with all children/clones and recreate it empty.
+  if sudo zfs list "$pool" >/dev/null 2>&1; then
+    local v
+    while IFS= read -r v; do
+      [ -b "/dev/zvol/$v" ] || continue
+      echo "    fuser -km /dev/zvol/$v"
+      sudo fuser -km "/dev/zvol/$v" 2>/dev/null || true
+    done < <(sudo zfs list -rHt volume -o name "$pool" 2>/dev/null)
+    sleep 2
+    echo "  Destroying and recreating $pool…"
+    sudo zfs destroy -Rf "$pool"
+  fi
+  sudo zfs create "$pool"
+
+  # 5. Wipe the incus state dir (DB + leftover storage-pool dirs) and any
+  #    backups from earlier failed runs so nothing pre-exists for the join.
+  sudo rm -rf /var/lib/incus /var/lib/incus.pre-join.*
   sudo mkdir -p /var/lib/incus
-  sudo systemctl start incus.socket incus.service
-  # Give the socket a moment to come back.
-  for _ in 1 2 3 4 5; do incus info >/dev/null 2>&1 && break; sleep 1; done
+
+  # 6. Start only the socket; the join preseed socket-activates incusd with an
+  #    empty database (no standalone pre-init race).
+  sudo systemctl start incus.socket
 
   echo "==> Joining the cluster…"
-  sudo incus admin init --preseed <<EOF
+  local join_preseed
+  join_preseed=$(cat <<EOF
 cluster:
   enabled: true
   server_name: $self
@@ -150,8 +201,20 @@ cluster:
   member_config:
 $member_yaml
 EOF
+)
+  printf '%s\n' "$join_preseed" | grep -v cluster_token || true   # echo, token redacted
+  if ! printf '%s\n' "$join_preseed" | sudo incus admin init --preseed; then
+    die "incus admin init --preseed failed (see error above). Local state was reset; fix the cause and re-run 'incus-cluster join'."
+  fi
 
-  echo "==> Joined. Cluster members:"
+  # Verify membership actually took before declaring success.
+  clustered || die "join preseed ran without error but this node is NOT a cluster member (incus query /1.0/cluster shows disabled). Check the seed's 'incus cluster list'."
+
+  # Join succeeded — re-enable the preseed service. Future preseed runs (e.g.
+  # after nixos-rebuild) update existing resources, a no-op for most keys.
+  sudo systemctl unmask --runtime incus-preseed.service 2>/dev/null || true
+
+  echo "==> Joined '$name'. Cluster members:"
   incus cluster list
 }
 
