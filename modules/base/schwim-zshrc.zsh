@@ -23,7 +23,7 @@ compinit
 
 if [[ -o login ]] && [[ -t 0 ]]; then
   __src=$HOME/src
-  __repos=(nix-home nixos-configs)
+  __repos=(nix-home-manager nixos-configs)
   __missing=()
   for r in $__repos; do
     [[ -d "$__src/$r" ]] || __missing+=($r)
@@ -43,7 +43,7 @@ if [[ -o login ]] && [[ -t 0 ]]; then
         done
         print
         print "Next, bootstrap home-manager:"
-        print "  cd ~/src/nix-home/manager && nix run .#homectl -- switch"
+        print "  cd ~/src/nix-home-manager/manager && nix run .#homectl -- switch"
         print "  then open a new zsh shell to pick up the changes."
         print
       else
@@ -53,7 +53,7 @@ if [[ -o login ]] && [[ -t 0 ]]; then
   elif [[ ! -e "$HOME/.local/state/nix/profiles/home-manager" ]]; then
     print
     print "Repos present; home-manager not yet set up:"
-    print "  cd ~/src/nix-home/manager && nix run .#homectl -- switch"
+    print "  cd ~/src/nix-home-manager/manager && nix run .#homectl -- switch"
     print "  then open a new zsh shell to pick up the changes."
     print
   fi
