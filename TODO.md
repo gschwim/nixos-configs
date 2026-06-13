@@ -117,11 +117,3 @@ Hard-coded "Greg Schwimer" and "7e7":
 
 **Risk:** none. Safe to delete the entire directory.
 
-# Misc
-
-## install-host.sh safety checks
-
-The script should detect if it is installing against the installer or base image or a live system to be extra sure it doesn't clobber a running system in error. Allow --force to override.
-
-##  install-host.sh 
-

@@ -2,7 +2,13 @@
 # install-host.sh — install a NixOS host end-to-end from blushda using nixos-anywhere.
 #
 # Usage:
-#   scripts/install-host.sh <hostname> <target-ip>
+#   scripts/install-host.sh <hostname> <target-ip> [--force] [--resume]
+#
+#   --force   Skip all confirmation prompts (unattended). Also bypasses the
+#             live-system safety check below — use with care.
+#   --resume  Skip the kexec phase (runs --phases disko,install,reboot). Use to
+#             finish an install after a kexec IP change dropped the session:
+#             reconnect to the target's new IP and re-run with --resume.
 #
 # Assumes the target is booted into a NixOS installer (graphical or minimal)
 # with sshd running, your SSH key authorized for $INSTALL_USER (defaults to
@@ -43,10 +49,23 @@ usage() {
   exit "${1:-1}"
 }
 
-[ "$#" -eq 2 ] || usage
+FORCE=0
+RESUME=0
+POSITIONAL=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --force)   FORCE=1; shift ;;
+    --resume)  RESUME=1; shift ;;
+    -h|--help) usage 0 ;;
+    --)        shift; while [ "$#" -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
+    -*)        echo "ERROR: unknown flag: $1" >&2; usage ;;
+    *)         POSITIONAL+=("$1"); shift ;;
+  esac
+done
+[ "${#POSITIONAL[@]}" -eq 2 ] || usage
 
-HOSTNAME="$1"
-TARGET="$2"
+HOSTNAME="${POSITIONAL[0]}"
+TARGET="${POSITIONAL[1]}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST_DIR="$REPO_ROOT/hosts/$HOSTNAME"
 HOST_KEY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/nixos-configs/host-keys"
@@ -101,17 +120,89 @@ if grep -q "REPLACE_WITH_${HOSTNAME_UPPER}_HOST_PUBKEY" "$REPO_ROOT/secrets/secr
   [ "$ans" = "y" ] || [ "$ans" = "Y" ] || exit 1
 fi
 
-# Destructive-action confirmation. nixos-anywhere will erase the target's
-# disk via disko — make sure we mean it.
+# ----- probe target: installer vs live system + live network config --------
+# One round-trip BEFORE we wipe anything. Classifies the target as an ephemeral
+# installer (safe to wipe) vs a live installed system (overwriting it is the
+# dangerous case the safety check guards), and captures the live network config
+# so we can speak to the kexec IP-stability question. The remote snippet is
+# single-quoted: it runs verbatim on the target, nothing expands locally.
+echo "Probing $INSTALL_USER@$TARGET …"
+probe="$(ssh "${SSH_OPTS[@]}" "$INSTALL_USER@$TARGET" '
+  rootfs=$(findmnt -no FSTYPE / 2>/dev/null || echo "")
+  rostore=$(findmnt -rno TARGET /nix/.ro-store 2>/dev/null || echo "")
+  host=$(hostname 2>/dev/null || echo "")
+  def=$(ip -o -4 route show default 2>/dev/null | head -n1)
+  dev=$(printf "%s" "$def" | sed -n "s/.* dev \([^ ]*\).*/\1/p")
+  gw=$(printf "%s" "$def" | sed -n "s/.*via \([^ ]*\).*/\1/p")
+  line=$(ip -o -4 addr show dev "$dev" 2>/dev/null | head -n1)
+  addr=$(printf "%s" "$line" | sed -n "s#.* inet \([0-9.]*/[0-9]*\).*#\1#p")
+  dyn=0; printf "%s" "$line" | grep -qw dynamic && dyn=1
+  printf "ROOTFS=%s\nROSTORE=%s\nHOST=%s\nDEV=%s\nGW=%s\nADDR=%s\nDYN=%s\n" \
+    "$rootfs" "$rostore" "$host" "$dev" "$gw" "$addr" "$dyn"
+' 2>/dev/null || true)"
+
+T_ROOTFS=$(printf '%s\n'  "$probe" | sed -n 's/^ROOTFS=//p')
+T_ROSTORE=$(printf '%s\n' "$probe" | sed -n 's/^ROSTORE=//p')
+T_HOST=$(printf '%s\n'    "$probe" | sed -n 's/^HOST=//p')
+T_DEV=$(printf '%s\n'     "$probe" | sed -n 's/^DEV=//p')
+T_GW=$(printf '%s\n'      "$probe" | sed -n 's/^GW=//p')
+T_ADDR=$(printf '%s\n'    "$probe" | sed -n 's/^ADDR=//p')
+T_DYN=$(printf '%s\n'     "$probe" | sed -n 's/^DYN=//p')
+
+# Classify. Default 'live' (fail closed) if the probe yielded nothing.
+KIND=live
+case "$T_ROOTFS" in tmpfs|overlay) KIND=installer ;; esac
+if [ -n "$T_ROSTORE" ];               then KIND=installer; fi  # NixOS live-ISO squashfs store
+if [ "$T_HOST" = "nixos-installer" ]; then KIND=installer; fi  # our custom ISO
+
+NETMODE=static
+[ "$T_DYN" = 1 ] && NETMODE=dhcp
+
+# ----- summary --------------------------------------------------------------
 echo
 echo "About to install NixOS host '$HOSTNAME' onto $INSTALL_USER@$TARGET."
 echo "  Flake:       $REPO_ROOT#$HOSTNAME"
 echo "  hostId:      $HOSTID"
 echo "  Host key:    $HOST_KEY"
 echo "  SSH as:      $INSTALL_USER (needs passwordless sudo on target)"
+kind_detail=""
+[ -n "$T_HOST" ] && kind_detail=" (hostname $T_HOST, root ${T_ROOTFS:-unknown})"
+echo "  Target kind: ${KIND}${kind_detail}"
+[ -n "$T_ADDR" ] && echo "  Target net:  $T_ADDR on ${T_DEV:-?} via ${T_GW:-?} ($NETMODE)"
+[ "$RESUME" = 1 ] && echo "  Resume:      skipping kexec (--phases disko,install,reboot)"
 echo "  ⚠️  This WIPES the target disk (via disko)."
-read -rp "Continue? (y/N) " ans
-[ "$ans" = "y" ] || [ "$ans" = "Y" ] || exit 1
+
+# ----- kexec IP-stability note (live target only; no kexec on installers) ----
+if [ "$KIND" = live ] && [ "$RESUME" != 1 ]; then
+  echo
+  if [ "$NETMODE" = static ]; then
+    echo "  Note: target has a STATIC IP — the kexec installer preserves static"
+    echo "        addresses/routes, so this session should survive the kexec."
+  else
+    echo "  ⚠️  Target is on DHCP. nixos-anywhere will kexec into its installer,"
+    echo "      which re-runs DHCP on ${T_DEV:-the interface}. Usually the same"
+    echo "      lease returns, but if this session drops, reconnect to the new IP"
+    echo "      and finish with:"
+    echo "        scripts/install-host.sh $HOSTNAME <new-ip> --force --resume"
+  fi
+fi
+
+# ----- confirmation gate ----------------------------------------------------
+if [ "$FORCE" = 1 ]; then
+  echo
+  echo "  --force: proceeding without confirmation."
+elif [ "$KIND" = live ]; then
+  # Overwriting a running machine — stronger than a y/N: type its hostname.
+  confirm_word="${T_HOST:-$TARGET}"
+  echo
+  echo "  ⚠️  $TARGET looks like a LIVE system, NOT an installer."
+  echo "      You are about to install OVER it and WIPE its disk."
+  read -rp "  Type '$confirm_word' to confirm: " ans
+  [ "$ans" = "$confirm_word" ] || { echo "Confirmation mismatch — aborted, nothing changed." >&2; exit 1; }
+else
+  read -rp "Continue? (y/N) " ans
+  [ "$ans" = "y" ] || [ "$ans" = "Y" ] || exit 1
+fi
 
 # ----- ensure host key exists ---------------------------------------------
 # gen-host-key.sh is the single source of truth: it pulls from keepassxc
@@ -149,7 +240,7 @@ for f in "$REPO_ROOT/lib/host-certs/${HOSTNAME}_ssh_host_ed25519_key.pub" \
          "$REPO_ROOT/lib/host-certs/${HOSTNAME}_ssh_host_ed25519_key-cert.pub" \
          "$REPO_ROOT/secrets/host-keys/${HOSTNAME}_ssh_host_ed25519_key.age"; do
   [ -f "$f" ] \
-    || { echo "ERROR: missing $(echo "$f" | sed "s|$REPO_ROOT/||") — run scripts/gen-host-key.sh $HOSTNAME" >&2; exit 2; }
+    || { echo "ERROR: missing ${f#"$REPO_ROOT/"} — run scripts/gen-host-key.sh $HOSTNAME" >&2; exit 2; }
 done
 
 # User keys + certs for management hosts: again, just verify the repo
@@ -174,6 +265,7 @@ fi
 echo "Preflight on $TARGET as $INSTALL_USER (sudo for root ops):"
 echo "  - set installer hostid to $HOSTID (for ZFS/disko)"
 echo "  - seed /root/.ssh/authorized_keys (nixos-anywhere pivots to root@ mid-install)"
+# shellcheck disable=SC2029  # $HOSTID/$INSTALL_USER intentionally expand client-side
 ssh "${SSH_OPTS[@]}" "$INSTALL_USER@$TARGET" "
   set -e
   sudo zgenhostid -fo /run/hostid $HOSTID
@@ -200,6 +292,10 @@ ssh "${SSH_OPTS[@]}" "$INSTALL_USER@$TARGET" "
 
 echo
 echo "Invoking nixos-anywhere → $INSTALL_USER@$TARGET (flake .#$HOSTNAME) …"
+# --resume: target is already in the kexec installer (e.g. after a kexec IP
+# change dropped the first run) — skip the kexec phase and just finish.
+PHASES_ARGS=()
+[ "$RESUME" = 1 ] && PHASES_ARGS=(--phases "disko,install,reboot")
 nix --extra-experimental-features 'nix-command flakes' \
     run github:nix-community/nixos-anywhere -- \
     --flake "$REPO_ROOT#$HOSTNAME" \
@@ -207,6 +303,7 @@ nix --extra-experimental-features 'nix-command flakes' \
     --generate-hardware-config nixos-generate-config "$HOST_DIR/hardware-configuration.nix" \
     --extra-files "$STAGING" \
     --build-on remote \
+    "${PHASES_ARGS[@]}" \
     --ssh-option "StrictHostKeyChecking=no" \
     --ssh-option "UserKnownHostsFile=/dev/null"
 
