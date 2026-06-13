@@ -7,8 +7,8 @@ Quick reference for launching instances on the incus host. The source of truth f
 | Name | Type | Subnet | DHCP | NAT | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `incusbr0` | NAT bridge | auto | yes | yes | Default isolated network. Containers reach the internet via SNAT; no inbound. |
-| `prod` | Routed bridge | 172.16.4.0/24 | yes (dynamic .100-.200) | no | DHCP pool, gateway `.254`. |
-| `infra100` | L2 bridge over `dong0.100` | 172.16.0.0/24 | none (set via cloud-init) | no | Pure pass-through. No IP on the bridge, no dnsmasq. Instances reach the upstream VLAN 100 gateway (172.16.0.254) directly. |
+| `infra100` | L2 bridge over `<iface>.100` | 172.16.0.0/24 | none (set via cloud-init) | no | Pure pass-through (VLAN 100). No IP on the bridge, no dnsmasq. Instances reach the upstream gateway 172.16.0.254 directly. |
+| `cloud104` | L2 bridge over `<iface>.104` | 172.16.4.0/24 | none (set via cloud-init) | no | Pure pass-through (VLAN 104), identical shape to infra100. Upstream gateway 172.16.4.254. |
 
 ## Profile menu
 
@@ -19,8 +19,7 @@ Compose multiple profiles on launch — later profiles override same-named devic
 | Bootstrap | `default` | Root disk on `default` pool + `eth0` on `incusbr0`. |
 | | `basebuild01` | Standalone starter: same root + eth0 as `default`, plus cloud-init (apt update/upgrade, openssh-server + neovim + zsh, sudo user with SSH key). Apply alone — no need to also apply `default`. |
 | Network | `net-incusbr0` | `eth0` on `incusbr0` (NAT). |
-| | `net-prod` | `eth0` on `prod` (routed 172.16.4.0/24). |
-| | _(none for `infra100`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
+| | _(none for `infra100`/`cloud104`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
 | Storage | `storage-10GB` / `40GB` / `80GB` / `100GB` | Sized root disk on `default` pool. |
 | | `disk-default` | Root disk on `default` pool, unsized. |
 | CPU | `cpu-1` / `cpu-4` / `cpu-8` | `limits.cpu` =N. |
@@ -170,7 +169,7 @@ manually. The full per-member `member_config` Incus requires — storage-pool
 `source` **and** `zfs.pool_name`, plus the `infra100` `bridge.external_interfaces`
 trunk — is supplied automatically at join, from the descriptor. The join also
 resets local Incus to a clean slate first (empties the ZFS pool, wipes
-`/var/lib/incus`, and deletes leftover `incusbr0`/`prod`/`infra100` bridge devices
+`/var/lib/incus`, and deletes leftover `incusbr0`/`infra100`/`cloud104` bridge devices
 that would otherwise make the join fail with a misleading "Network not found").
 
 ### Caveats

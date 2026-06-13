@@ -3,7 +3,7 @@
 # MAC-pinned cloud-init network-config from per-network gateway/DNS
 # kept in the NET_* tables below.
 #
-# Networks served by incus DHCP (incusbr0, prod) are NOT this script's
+# Networks served by incus DHCP (incusbr0) are NOT this script's
 # job — attach to those via `-p net-<x>` directly on `incus launch`.
 #
 # Usage:
@@ -11,7 +11,7 @@
 #
 # Examples:
 #   incus-launch web01 ubuntu:26.04 infra100:172.16.0.66
-#   incus-launch web02 images:debian/12 --vm infra100:172.16.0.66 vlan3:10.0.3.66 -- -p storage-80GB -p mem-8GB
+#   incus-launch web02 images:debian/12 --vm cloud104:172.16.4.66 infra100:172.16.0.66 -- -p storage-80GB -p mem-8GB
 
 usage() {
   cat >&2 <<'EOF'
@@ -31,17 +31,18 @@ Usage:
 
 Examples:
   incus-launch web01 ubuntu:26.04 infra100:172.16.0.66
-  incus-launch web02 ubuntu:26.04 --vm infra100:172.16.0.66 vlan3:10.0.3.66 -- -p mem-8GB
+  incus-launch web02 ubuntu:26.04 --vm cloud104:172.16.4.66 infra100:172.16.0.66 -- -p mem-8GB
 EOF
   exit "${1:-1}"
 }
 
 # ---- per-network metadata --------------------------------------------------
 # Add a row when standing up a new L2-passthrough incus network.
-# Skip incus-DHCP networks (incusbr0, prod) — those don't go here.
+# Skip incus-DHCP networks (incusbr0) — those don't go here.
 
 declare -A NET_GW NET_DNS NET_PREFIX
 NET_GW[infra100]="172.16.0.254"; NET_DNS[infra100]="172.16.1.253"; NET_PREFIX[infra100]="24"
+NET_GW[cloud104]="172.16.4.254"; NET_DNS[cloud104]="172.16.1.253"; NET_PREFIX[cloud104]="24"
 
 # ---- helpers ---------------------------------------------------------------
 

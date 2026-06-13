@@ -150,7 +150,7 @@ EOF
   pool=$(jq -r '.memberConfig[] | select(.entity == "storage-pool" and .key == "source") | .value' "$DESC" | head -1)
   [ -n "$pool" ] && [ "$pool" != "null" ] || die "could not determine ZFS storage pool source from $DESC"
 
-  # The cluster's managed bridge names (from the seed — incusbr0/prod/infra100…).
+  # The cluster's managed bridge names (from the seed — incusbr0/infra100/cloud104…).
   # We delete any LEFTOVER local devices with these names before joining: a
   # stale unmanaged bridge from this node's prior standalone preseed makes the
   # join's network creation roll back and fail with "Network not found". Host
