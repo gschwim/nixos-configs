@@ -166,8 +166,12 @@ sudo incus-cluster join              # SSHes the seed for a token, resets, joins
 ```
 
 `incus-cluster token <member>` mints a token by hand if you want to join a node
-manually. Per-member storage source (`rpool/incus`) and the `vlan2` trunk are
-supplied automatically as `member_config` at join, from the descriptor.
+manually. The full per-member `member_config` Incus requires — storage-pool
+`source` **and** `zfs.pool_name`, plus the `vlan2` `bridge.external_interfaces`
+trunk — is supplied automatically at join, from the descriptor. The join also
+resets local Incus to a clean slate first (empties the ZFS pool, wipes
+`/var/lib/incus`, and deletes leftover `incusbr0`/`prod`/`vlan2` bridge devices
+that would otherwise make the join fail with a misleading "Network not found").
 
 ### Caveats
 
@@ -179,9 +183,10 @@ supplied automatically as `member_config` at join, from the descriptor.
   returns or you `incus cluster remove --force` it.
 - **Join is destructive.** `incus-cluster join` wipes the joiner's local Incus
   (instances/images/profiles). `incus export` anything worth keeping first.
-- **`iris` has no VLAN 2 trunk.** `iris` has no `dong0.2` subif, so its `vlan2`
-  bridge carries nothing locally. It still clusters fine; give it its own trunk
-  (and set `my.services.incus.vlan2Trunk`) when VLAN 2 instances need to run there.
+- **VLAN 2 trunk is per-host.** Each host sets `my.services.incus.vlan2Trunk` to
+  its local trunk subif (`enp3s0.2` on `iris`, `dong0.2` on `pleiades`) and
+  declares a matching `networking.vlans."<trunk>"`. A host that omits it gets an
+  inert `vlan2` bridge (created, but with no external port); it still clusters fine.
 
 ## Troubleshooting
 

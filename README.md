@@ -371,7 +371,12 @@ What the script does end-to-end (see [scripts/install-host.sh](scripts/install-h
 
 Notes on the flags: `--build-on remote` is set explicitly because the workstation (Darwin) can't build x86_64-linux; without it `nixos-anywhere` runs a noisy probe before falling back. `StrictHostKeyChecking=no` is set on every installer-bound SSH connection because installer ISOs regenerate their host keys every boot — a stable known_hosts entry would only cause "host key changed" errors on re-installs.
 
-The script prompts twice before doing anything destructive: once if `secrets/secrets.nix` still has a `REPLACE_WITH_…` placeholder for this host, once again before the disk wipe.
+Before anything destructive the script **probes the target** and prompts: once if `secrets/secrets.nix` still has a `REPLACE_WITH_…` placeholder for this host, and again before the disk wipe. The wipe confirmation depends on what the probe found:
+
+- **Installer target** (ephemeral root — the custom ISO or any NixOS live image): a simple `y/N`.
+- **Live installed system** (you're about to overwrite a running machine): a stronger confirm — you must type the target's detected hostname.
+
+`--force` skips all confirmations (unattended).
 
 ### 3. Commit the regenerated `hardware-configuration.nix`
 
@@ -384,6 +389,22 @@ git push
 ### 4. Back up the host key
 
 `~/.local/share/nixos-configs/host-keys/<hostname>_ed25519` is the agenix decryption identity for this host. The KeepassXC round-trip already protects it (the kdbx is the source of truth), but if you lose both the kdbx entry *and* the local cache, every agenix secret encrypted to this host has to be re-keyed. Keep your kdbx backed up.
+
+## Installing over a running system (kexec)
+
+The normal path boots the target into the **installer ISO** first. If you instead point `install-host.sh` at a **live OS** (a running machine, no installer booted), `nixos-anywhere` first **kexecs** into its installer image in RAM. Two caveats:
+
+- **kexec is hardware-dependent.** It hangs or powers the machine off on some hardware — on this fleet *both* the laptop (pleiades) and the server (iris) failed it. When in doubt, boot the **custom USB ISO** and install against that instead (no kexec). A hung kexec is *pre-disk* (disko only runs after `nixos-anywhere` reconnects), so the target's disk is untouched — just reboot it back to its old system.
+- **The IP can move.** The kexec-installer preserves **static** IPs/routes but re-DHCPs **dynamic** ones. The preflight probe reports the target's address and whether it's static or DHCP. If a kexec drops the session, reconnect to the target's new IP and finish with **`--resume`** (skips the completed kexec phase, i.e. `--phases disko,install,reboot`).
+
+To see what a failing kexec is doing on a VGA-only box (the stock kexec image logs to serial only), build the dual-console image on a Linux host and pass it:
+
+```bash
+nix build .#kexec-vga                                  # on a Linux host (Darwin can't build x86_64-linux)
+scripts/install-host.sh <host> <ip> --force --kexec ./result
+```
+
+It logs boot/panic output to **both** serial and VGA.
 
 ## Manual install
 
