@@ -18,14 +18,14 @@ compinit
 # ── First-login bootstrap ─────────────────────────────────────────────
 # On interactive login shells: offer to clone the fleet repos under ~/src/,
 # then offer to bootstrap home-manager by running `nix run .#homectl -- switch`
-# in ~/src/nix-home-manager/manager. Both prompts default to Yes and re-ask on
+# in ~/src/nix-home-manager. Both prompts default to Yes and re-ask on
 # the next login until done. The homectl run activates HM, which then overwrites
 # this entire file (so this block only runs pre-HM).
 
 if [[ -o login ]] && [[ -t 0 ]]; then
   __src=$HOME/src
   __repos=(nix-home-manager nixos-configs)
-  __hm=$__src/nix-home-manager/manager
+  __hm=$__src/nix-home-manager
   __missing=()
   for r in $__repos; do
     [[ -d "$__src/$r" ]] || __missing+=($r)
