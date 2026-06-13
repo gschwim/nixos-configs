@@ -9,6 +9,12 @@
 #   --resume  Skip the kexec phase (runs --phases disko,install,reboot). Use to
 #             finish an install after a kexec IP change dropped the session:
 #             reconnect to the target's new IP and re-run with --resume.
+#   --kexec <ref>
+#             Use a custom kexec-installer image instead of the nixos-anywhere
+#             default. Pass a path or flake ref. For troubleshooting a kexec
+#             that goes dark, build the dual-console image on a LINUX host
+#             (nix build .#kexec-vga) and pass its ./result here so boot/panic
+#             output shows on BOTH serial and VGA.
 #
 # Assumes the target is booted into a NixOS installer (graphical or minimal)
 # with sshd running, your SSH key authorized for $INSTALL_USER (defaults to
@@ -51,11 +57,14 @@ usage() {
 
 FORCE=0
 RESUME=0
+KEXEC_REF=""
 POSITIONAL=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --force)   FORCE=1; shift ;;
     --resume)  RESUME=1; shift ;;
+    --kexec)   KEXEC_REF="${2:?--kexec needs a path or flake ref}"; shift 2 ;;
+    --kexec=*) KEXEC_REF="${1#*=}"; shift ;;
     -h|--help) usage 0 ;;
     --)        shift; while [ "$#" -gt 0 ]; do POSITIONAL+=("$1"); shift; done ;;
     -*)        echo "ERROR: unknown flag: $1" >&2; usage ;;
@@ -296,6 +305,8 @@ echo "Invoking nixos-anywhere → $INSTALL_USER@$TARGET (flake .#$HOSTNAME) …"
 # change dropped the first run) — skip the kexec phase and just finish.
 PHASES_ARGS=()
 [ "$RESUME" = 1 ] && PHASES_ARGS=(--phases "disko,install,reboot")
+KEXEC_ARGS=()
+[ -n "$KEXEC_REF" ] && KEXEC_ARGS=(--kexec "$KEXEC_REF")
 nix --extra-experimental-features 'nix-command flakes' \
     run github:nix-community/nixos-anywhere -- \
     --flake "$REPO_ROOT#$HOSTNAME" \
@@ -304,6 +315,7 @@ nix --extra-experimental-features 'nix-command flakes' \
     --extra-files "$STAGING" \
     --build-on remote \
     "${PHASES_ARGS[@]}" \
+    "${KEXEC_ARGS[@]}" \
     --ssh-option "StrictHostKeyChecking=no" \
     --ssh-option "UserKnownHostsFile=/dev/null"
 
