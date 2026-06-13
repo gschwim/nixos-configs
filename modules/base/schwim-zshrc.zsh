@@ -16,47 +16,53 @@ compinit
 # End of lines added by compinstall
 
 # ── First-login bootstrap ─────────────────────────────────────────────
-# On interactive login shells, offer to clone the fleet repos under
-# ~/src/. If declined, asks again on the next login. Once repos are
-# present, prints the home-manager bootstrap hint instead. Running
-# `nix run .#homectl -- switch` activates HM, which overwrites this file.
+# On interactive login shells: offer to clone the fleet repos under ~/src/,
+# then offer to bootstrap home-manager by running `nix run .#homectl -- switch`
+# in ~/src/nix-home-manager/manager. Both prompts default to Yes and re-ask on
+# the next login until done. The homectl run activates HM, which then overwrites
+# this entire file (so this block only runs pre-HM).
 
 if [[ -o login ]] && [[ -t 0 ]]; then
   __src=$HOME/src
   __repos=(nix-home-manager nixos-configs)
+  __hm=$__src/nix-home-manager/manager
   __missing=()
   for r in $__repos; do
     [[ -d "$__src/$r" ]] || __missing+=($r)
   done
 
+  # 1. Clone any missing fleet repos.
   if (( ${#__missing} > 0 )); then
     print
     print "Fleet repos missing in $__src/: ${__missing[*]}"
     print -n "Clone now from github.com/gschwim/? [Y/n] "
-    if read __ans; then
-      if [[ -z "$__ans" || "$__ans" == [Yy]* ]]; then
-        mkdir -p "$__src"
-        for r in $__missing; do
-          if ! git -C "$__src" clone "https://github.com/gschwim/$r.git"; then
-            print "  clone of $r failed; will ask again next login"
-          fi
-        done
-        print
-        print "Next, bootstrap home-manager:"
-        print "  cd ~/src/nix-home-manager/manager && nix run .#homectl -- switch"
-        print "  then open a new zsh shell to pick up the changes."
-        print
-      else
-        print "Skipped. Will ask again next login."
-      fi
+    if read __ans && [[ -z "$__ans" || "$__ans" == [Yy]* ]]; then
+      mkdir -p "$__src"
+      for r in $__missing; do
+        git -C "$__src" clone "https://github.com/gschwim/$r.git" \
+          || print "  clone of $r failed; will ask again next login"
+      done
+    else
+      print "Skipped. Will ask again next login."
     fi
-  elif [[ ! -e "$HOME/.local/state/nix/profiles/home-manager" ]]; then
-    print
-    print "Repos present; home-manager not yet set up:"
-    print "  cd ~/src/nix-home-manager/manager && nix run .#homectl -- switch"
-    print "  then open a new zsh shell to pick up the changes."
-    print
   fi
 
-  unset __src __repos __missing __ans r
+  # 2. Offer to bootstrap home-manager (once the repo is present and HM isn't
+  #    set up yet). Actually runs it, rather than just printing the command.
+  if [[ -d "$__hm" ]] && [[ ! -e "$HOME/.local/state/nix/profiles/home-manager" ]]; then
+    print
+    print -n "Bootstrap home-manager now (nix run .#homectl -- switch)? [Y/n] "
+    if read __ans && [[ -z "$__ans" || "$__ans" == [Yy]* ]]; then
+      if ( cd "$__hm" && nix run .#homectl -- switch ); then
+        print
+        print "home-manager activated. Open a new zsh shell to pick up the changes."
+      else
+        print "homectl switch failed; re-run later from $__hm"
+      fi
+    else
+      print "Skipped. Run later:  cd $__hm && nix run .#homectl -- switch"
+    fi
+  fi
+
+  unset __src __repos __hm __missing __ans r
 fi
