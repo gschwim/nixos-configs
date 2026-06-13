@@ -2,3 +2,6 @@ starting-configs/
 result
 result-*
 .direnv/
+
+# Nix build artifacts copied into the tree (e.g. kexec image tarball)
+*.tar.gz

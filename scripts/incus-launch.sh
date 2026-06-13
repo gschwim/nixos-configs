@@ -10,8 +10,8 @@
 #   incus-launch <name> <image> [--vm] <net>:<ip>[/<prefix>] [<net>:<ip>...] [-- <incus-args>]
 #
 # Examples:
-#   incus-launch web01 ubuntu:26.04 vlan2:172.16.0.66
-#   incus-launch web02 images:debian/12 --vm vlan2:172.16.0.66 vlan3:10.0.3.66 -- -p storage-80GB -p mem-8GB
+#   incus-launch web01 ubuntu:26.04 infra100:172.16.0.66
+#   incus-launch web02 images:debian/12 --vm infra100:172.16.0.66 vlan3:10.0.3.66 -- -p storage-80GB -p mem-8GB
 
 usage() {
   cat >&2 <<'EOF'
@@ -30,8 +30,8 @@ Usage:
              (e.g., -p storage-80GB -p mem-8GB)
 
 Examples:
-  incus-launch web01 ubuntu:26.04 vlan2:172.16.0.66
-  incus-launch web02 ubuntu:26.04 --vm vlan2:172.16.0.66 vlan3:10.0.3.66 -- -p mem-8GB
+  incus-launch web01 ubuntu:26.04 infra100:172.16.0.66
+  incus-launch web02 ubuntu:26.04 --vm infra100:172.16.0.66 vlan3:10.0.3.66 -- -p mem-8GB
 EOF
   exit "${1:-1}"
 }
@@ -41,7 +41,7 @@ EOF
 # Skip incus-DHCP networks (incusbr0, prod) — those don't go here.
 
 declare -A NET_GW NET_DNS NET_PREFIX
-NET_GW[vlan2]="172.16.0.254"; NET_DNS[vlan2]="172.16.1.253"; NET_PREFIX[vlan2]="24"
+NET_GW[infra100]="172.16.0.254"; NET_DNS[infra100]="172.16.1.253"; NET_PREFIX[infra100]="24"
 
 # ---- helpers ---------------------------------------------------------------
 

@@ -47,25 +47,26 @@
   nameservers  = [ "172.16.1.253" ];
   };
 
-  # Tagged VLAN 2 trunk on dong0. The subif itself carries no IP — it's
-  # enslaved by the incus 'vlan2' bridge (modules/services/incus.nix) as a
-  # straight L2 pass-through to container veths.
-  networking.vlans."dong0.2" = {
-    id        = 2;
+  # Tagged VLAN 100 trunk on dong0. The subif itself carries no IP — it's
+  # enslaved by the incus 'infra100' bridge (modules/services/incus.nix)
+  # as a straight L2 pass-through to container veths.
+  networking.vlans."dong0.100" = {
+    id        = 100;
     interface = "dong0";
   };
 
   # The NM auto-exclusion in modules/networking/default.nix only fires for
-  # ifaces with a declared ipv4.addresses; dong0.2 has none, so name it.
-  my.networking.networkmanager.unmanaged = [ "interface-name:dong0.2" ];
+  # ifaces with a declared ipv4.addresses; dong0.100 has none, so name it.
+  my.networking.networkmanager.unmanaged = [ "interface-name:dong0.100" ];
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;
   my.services.incus.enable     = true;       # flip off when laptop leaves the cluster
-  # This host's VLAN 2 trunk. The incus module enslaves it into the vlan2
-  # bridge and pins incus to start after dong0.2-netdev (cold-boot race fix).
-  my.services.incus.vlan2Trunk = "dong0.2";
+  # This host's VLAN 100 trunk. The incus module enslaves it into the
+  # 'infra100' bridge and pins incus to start after dong0.100-netdev
+  # (cold-boot race fix).
+  my.services.incus.infra100Trunk = "dong0.100";
   # preventSleep is on by default via my.host.role = "server" above.
 
   system.stateVersion = "25.11";

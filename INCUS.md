@@ -8,7 +8,7 @@ Quick reference for launching instances on the incus host. The source of truth f
 | --- | --- | --- | --- | --- | --- |
 | `incusbr0` | NAT bridge | auto | yes | yes | Default isolated network. Containers reach the internet via SNAT; no inbound. |
 | `prod` | Routed bridge | 172.16.4.0/24 | yes (dynamic .100-.200) | no | DHCP pool, gateway `.254`. |
-| `vlan2` | L2 bridge over `dong0.2` | 172.16.0.0/24 | none (set via cloud-init) | no | Pure pass-through. No IP on the bridge, no dnsmasq. Instances reach the upstream VLAN 2 gateway (172.16.0.254) directly. |
+| `infra100` | L2 bridge over `dong0.100` | 172.16.0.0/24 | none (set via cloud-init) | no | Pure pass-through. No IP on the bridge, no dnsmasq. Instances reach the upstream VLAN 100 gateway (172.16.0.254) directly. |
 
 ## Profile menu
 
@@ -20,15 +20,15 @@ Compose multiple profiles on launch — later profiles override same-named devic
 | | `basebuild01` | Standalone starter: same root + eth0 as `default`, plus cloud-init (apt update/upgrade, openssh-server + neovim + zsh, sudo user with SSH key). Apply alone — no need to also apply `default`. |
 | Network | `net-incusbr0` | `eth0` on `incusbr0` (NAT). |
 | | `net-prod` | `eth0` on `prod` (routed 172.16.4.0/24). |
-| | _(none for `vlan2`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
+| | _(none for `infra100`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
 | Storage | `storage-10GB` / `40GB` / `80GB` / `100GB` | Sized root disk on `default` pool. |
 | | `disk-default` | Root disk on `default` pool, unsized. |
 | CPU | `cpu-1` / `cpu-4` / `cpu-8` | `limits.cpu` =N. |
 | Memory | `mem-1GB` / `mem-2GB` / `mem-4GB` / `mem-8GB` / `mem-16GB` | `limits.memory` =N. |
 
-## Deploy on `vlan2` with a static IP
+## Deploy on `infra100` with a static IP
 
-`vlan2` is a pure L2 pass-through — no DHCP on the bridge. Each instance needs its IP/gateway/DNS injected via cloud-init at launch. The `incus-launch` command (installed system-wide on any host with `my.services.incus.enable = true`; source at [scripts/incus-launch.sh](scripts/incus-launch.sh)) does this in one shot.
+`infra100` is a pure L2 pass-through — no DHCP on the bridge. Each instance needs its IP/gateway/DNS injected via cloud-init at launch. The `incus-launch` command (installed system-wide on any host with `my.services.incus.enable = true`; source at [scripts/incus-launch.sh](scripts/incus-launch.sh)) does this in one shot.
 
 ```
 incus-launch <name> <image> [--vm] <net>:<ip>[/<prefix>] [<net>:<ip>...] [-- <extra incus flags>]
@@ -41,21 +41,21 @@ Pick an unused address in 172.16.0.0/24 (avoid the gateway `.254` and anything i
 ### Container
 
 ```bash
-incus-launch web01 ubuntu:26.04 vlan2:172.16.0.50 \
+incus-launch web01 ubuntu:26.04 infra100:172.16.0.50 \
   -- -p basebuild01 -p storage-40GB -p mem-4GB
 ```
 
 ### VM
 
 ```bash
-incus-launch web02 ubuntu:26.04 --vm vlan2:172.16.0.50 \
+incus-launch web02 ubuntu:26.04 --vm infra100:172.16.0.50 \
   -- -p basebuild01 -p storage-40GB -p cpu-4 -p mem-4GB
 ```
 
-### Two NICs (e.g., vlan2 + vlan3)
+### Two NICs (e.g., infra100 + vlan3)
 
 ```bash
-incus-launch web03 ubuntu:26.04 --vm vlan2:172.16.0.50 vlan3:10.0.3.50 \
+incus-launch web03 ubuntu:26.04 --vm infra100:172.16.0.50 vlan3:10.0.3.50 \
   -- -p basebuild01 -p storage-40GB -p mem-4GB
 ```
 
@@ -65,7 +65,7 @@ The script auto-generates a stable MAC per `(instance-name, network-name)` pair 
 
 ### Adding a new L2-passthrough network
 
-1. Define the incus network in [modules/services/incus.nix](modules/services/incus.nix) (mirror the `vlan2` shape: `bridge.external_interfaces = "<trunk>"`, `ipv4.address = "none"`).
+1. Define the incus network in [modules/services/incus.nix](modules/services/incus.nix) (mirror the `infra100` shape: `bridge.external_interfaces = "<trunk>"`, `ipv4.address = "none"`).
 2. Add a row to the `NET_GW`/`NET_DNS`/`NET_PREFIX` tables at the top of [scripts/incus-launch.sh](scripts/incus-launch.sh).
 3. `nixos-rebuild switch` on each host that runs incus. Plan for a reboot ([see the network-changes-need-a-reboot pattern](#troubleshooting)).
 
@@ -89,7 +89,7 @@ The MAC the script generates is keyed on `(instance-name, network-name)`, so re-
 
 ```bash
 incus delete --force web01
-incus-launch web01 ubuntu:26.04 vlan2:172.16.0.51 -- -p default -p storage-40GB
+incus-launch web01 ubuntu:26.04 infra100:172.16.0.51 -- -p default -p storage-40GB
 ```
 
 In-place change without rebuild (preserves instance state):
@@ -167,10 +167,10 @@ sudo incus-cluster join              # SSHes the seed for a token, resets, joins
 
 `incus-cluster token <member>` mints a token by hand if you want to join a node
 manually. The full per-member `member_config` Incus requires — storage-pool
-`source` **and** `zfs.pool_name`, plus the `vlan2` `bridge.external_interfaces`
+`source` **and** `zfs.pool_name`, plus the `infra100` `bridge.external_interfaces`
 trunk — is supplied automatically at join, from the descriptor. The join also
 resets local Incus to a clean slate first (empties the ZFS pool, wipes
-`/var/lib/incus`, and deletes leftover `incusbr0`/`prod`/`vlan2` bridge devices
+`/var/lib/incus`, and deletes leftover `incusbr0`/`prod`/`infra100` bridge devices
 that would otherwise make the join fail with a misleading "Network not found").
 
 ### Caveats
@@ -183,10 +183,10 @@ that would otherwise make the join fail with a misleading "Network not found").
   returns or you `incus cluster remove --force` it.
 - **Join is destructive.** `incus-cluster join` wipes the joiner's local Incus
   (instances/images/profiles). `incus export` anything worth keeping first.
-- **VLAN 2 trunk is per-host.** Each host sets `my.services.incus.vlan2Trunk` to
-  its local trunk subif (`enp3s0.2` on `iris`, `dong0.2` on `pleiades`) and
+- **VLAN 100 trunk is per-host.** Each host sets `my.services.incus.infra100Trunk` to
+  its local trunk subif (`enp3s0.100` on `iris`, `dong0.100` on `pleiades`) and
   declares a matching `networking.vlans."<trunk>"`. A host that omits it gets an
-  inert `vlan2` bridge (created, but with no external port); it still clusters fine.
+  inert `infra100` bridge (created, but with no external port); it still clusters fine.
 
 ## Troubleshooting
 
@@ -217,15 +217,15 @@ that would otherwise make the join fail with a misleading "Network not found").
 L2 path through the bridge is broken. Diagnose from pleiades:
 
 ```bash
-ip -d link show dong0.2                 # exists, up, vlan id 2?
-bridge link show | grep dong0.2         # master vlan2 state forwarding?
-ping -c 2 -I vlan2 172.16.0.254         # can pleiades reach the gateway via the bridge?
+ip -d link show dong0.100                 # exists, up, vlan id 100?
+bridge link show | grep dong0.100         # master infra100 state forwarding?
+ping -c 2 -I infra100 172.16.0.254         # can pleiades reach the gateway via the bridge?
 ```
 
-- If `dong0.2` is missing → the VLAN subif didn't come up; `systemctl status dong0.2-netdev.service` and start it if needed.
-- If `bridge link` doesn't show dong0.2 enslaved → incus didn't enslave it. `sudo systemctl restart incus.service` usually fixes; if not, `sudo ip link set dong0.2 master vlan2`.
-- If pleiades itself can't ping the gateway via vlan2 → upstream switch isn't trunking VLAN 2 on the dong0 port, or the gateway isn't on VLAN 2.
+- If `dong0.100` is missing → the VLAN subif didn't come up; `systemctl status dong0.100-netdev.service` and start it if needed.
+- If `bridge link` doesn't show dong0.100 enslaved → incus didn't enslave it. `sudo systemctl restart incus.service` usually fixes; if not, `sudo ip link set dong0.100 master infra100`.
+- If pleiades itself can't ping the gateway via infra100 → upstream switch isn't trunking VLAN 100 on the dong0 port, or the gateway isn't on VLAN 100.
 
-**Rebooted pleiades, vlan2 bridge has no ports.**
+**Rebooted pleiades, infra100 bridge has no ports.**
 
-This is the cold-boot race between `dong0.2-netdev.service` and `incus.service`. The systemd ordering edge in [hosts/pleiades/default.nix](hosts/pleiades/default.nix) (`systemd.services.incus.after = [ "dong0.2-netdev.service" ]; wants = [ ... ];`) prevents it. If it recurs, confirm the edge is still present and active: `systemctl show incus.service -p After | grep dong0.2-netdev`.
+This is the cold-boot race between `dong0.100-netdev.service` and `incus.service`. The systemd ordering edge in [hosts/pleiades/default.nix](hosts/pleiades/default.nix) (`systemd.services.incus.after = [ "dong0.100-netdev.service" ]; wants = [ ... ];`) prevents it. If it recurs, confirm the edge is still present and active: `systemctl show incus.service -p After | grep dong0.100-netdev`.

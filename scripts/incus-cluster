@@ -132,7 +132,7 @@ EOF
 
   # Join-time member_config: ALL per-member keys incus prompts for in interactive
   # `incus admin init` — the complete set is mandatory. For our cluster that's
-  # storage-pool default {source, zfs.pool_name} + network vlan2
+  # storage-pool default {source, zfs.pool_name} + network infra100
   # bridge.external_interfaces. The set must be COMPLETE: an incomplete storage
   # member_config (e.g. omitting zfs.pool_name) breaks the whole
   # "initialize storage pools and networks" phase and surfaces as a misleading
@@ -150,11 +150,11 @@ EOF
   pool=$(jq -r '.memberConfig[] | select(.entity == "storage-pool" and .key == "source") | .value' "$DESC" | head -1)
   [ -n "$pool" ] && [ "$pool" != "null" ] || die "could not determine ZFS storage pool source from $DESC"
 
-  # The cluster's managed bridge names (from the seed — incusbr0/prod/vlan2…).
+  # The cluster's managed bridge names (from the seed — incusbr0/prod/infra100…).
   # We delete any LEFTOVER local devices with these names before joining: a
   # stale unmanaged bridge from this node's prior standalone preseed makes the
   # join's network creation roll back and fail with "Network not found". Host
-  # trunk subifs (dong0.2, enp3s0.2) are type=vlan/managed=NO on the seed, so
+  # trunk subifs (dong0.100, enp3s0.100) are type=vlan/managed=NO on the seed, so
   # they never appear here and are never touched. SSH is already proven working
   # (we just minted the token over it).
   local cluster_bridges
@@ -178,7 +178,7 @@ EOF
   #     Stopping incus.service does NOT tear these down (the journal shows
   #     dnsmasq "remains running" and the bridges survive until a reboot), and a
   #     stale incusbr0 device makes the join fail with "Network not found". Only
-  #     the cluster's managed bridges are deleted; host trunks (dong0.2) are not.
+  #     the cluster's managed bridges are deleted; host trunks (dong0.100) are not.
   sudo pkill -f 'dnsmasq.*var/lib/incus' 2>/dev/null || true
   local br
   for br in $cluster_bridges; do
@@ -246,7 +246,7 @@ EOF
   clustered || die "join preseed ran without error but this node is NOT a cluster member (incus query /1.0/cluster shows disabled). Check the seed's 'incus cluster list'."
 
   # Per-member network trunk(s) were supplied in the join member_config, so the
-  # vlan2 bridge already has its external interface. Nothing to apply here.
+  # infra100 bridge already has its external interface. Nothing to apply here.
 
   # Join succeeded — re-enable the preseed service. Future preseed runs (e.g.
   # after nixos-rebuild) update existing resources, a no-op for most keys.

@@ -29,14 +29,14 @@ let
   # interactive `incus admin init` prompts for them — an incomplete set breaks
   # the whole "initialize storage pools and networks" join phase. For the ZFS
   # 'default' pool that's BOTH `source` and `zfs.pool_name` (incus treats them
-  # as distinct member-specific keys, even when equal). vlan2's external trunk
+  # as distinct member-specific keys, even when equal). infra100's external trunk
   # is per-node too (and absent on hosts without a trunk).
   memberConfig =
     [ { entity = "storage-pool"; name = "default"; key = "source";        value = cfg.storagePool; }
       { entity = "storage-pool"; name = "default"; key = "zfs.pool_name"; value = cfg.storagePool; }
     ]
-    ++ lib.optional (cfg.vlan2Trunk != "")
-         { entity = "network"; name = "vlan2"; key = "bridge.external_interfaces"; value = cfg.vlan2Trunk; };
+    ++ lib.optional (cfg.infra100Trunk != "")
+         { entity = "network"; name = "infra100"; key = "bridge.external_interfaces"; value = cfg.infra100Trunk; };
 
   # The descriptor surfaced at /etc/incus-cluster.json for the helper + operator.
   clusterDescriptor = name: {
@@ -58,17 +58,17 @@ in {
       description = "ZFS dataset used as the 'default' Incus storage pool source.";
     };
 
-    vlan2Trunk = lib.mkOption {
+    infra100Trunk = lib.mkOption {
       type        = lib.types.str;
       default     = "";
-      example     = "dong0.2";
+      example     = "dong0.100";
       description = ''
-        The host's tagged VLAN 2 trunk subif, enslaved into the 'vlan2'
+        The host's tagged VLAN 100 trunk subif, enslaved into the 'infra100'
         L2-passthrough bridge. Set this per host to the local interface name
-        (e.g. "dong0.2" on pleiades, "enp3s0.2" on iris) — the network is
+        (e.g. "dong0.100" on pleiades, "enp3s0.100" on iris) — the network is
         otherwise defined uniformly across the fleet.
 
-        Empty string (the default) = no trunk on this host: the 'vlan2' bridge
+        Empty string (the default) = no trunk on this host: the 'infra100' bridge
         is created but carries no external port (inert locally), and no start-
         order edge is added. Pair this option with a matching
         `networking.vlans."<trunk>"` declaration on the host.
@@ -155,22 +155,22 @@ in {
             };
           }
           {
-            # Pure L2 pass-through for VLAN 2. The bridge enslaves the host's
-            # tagged trunk subif (cfg.vlan2Trunk, set per host) and carries
+            # Pure L2 pass-through for VLAN 100. The bridge enslaves the host's
+            # tagged trunk subif (cfg.infra100Trunk, set per host) and carries
             # NO IP, NO DHCP, NO NAT. Containers/VMs on this bridge sit on the
-            # same L2 segment as the rest of VLAN 2 and reach the upstream
+            # same L2 segment as the rest of VLAN 100 and reach the upstream
             # gateway (172.16.0.254) directly.
             #
             # Per-instance IPs are set via cloud-init.network-config on each
             # instance (or the launch helper) — incus runs no dnsmasq here,
             # so DHCP-style reservations don't apply. See INCUS.md.
-            name = "vlan2";
+            name = "infra100";
             type = "bridge";
             config = {
               "ipv4.address" = "none";
               "ipv6.address" = "none";
-            } // lib.optionalAttrs (cfg.vlan2Trunk != "") {
-              "bridge.external_interfaces" = cfg.vlan2Trunk;
+            } // lib.optionalAttrs (cfg.infra100Trunk != "") {
+              "bridge.external_interfaces" = cfg.infra100Trunk;
             };
           }
         ];
@@ -189,7 +189,7 @@ in {
             # bridge + cloud-init for the admin user. Apply alone (with
             # optional storage/cpu/mem profiles) — no need to also apply
             # `default`. incus-launch overrides eth0's network when
-            # attaching to L2-passthrough networks like vlan2.
+            # attaching to L2-passthrough networks like infra100.
             name = "basebuild01";
             description = "Base VM/Container image (root + eth0/incusbr0 + cloud-init)";
             config = {
@@ -227,7 +227,7 @@ in {
           { name = "net-prod";     description = "Attach to prod routed bridge (172.16.4.0/24)"; devices.eth0 = { type = "nic"; network = "prod";     name = "eth0"; }; }
           { name = "net-incusbr0"; description = "Attach to default NAT bridge";                  devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
-          # No net-vlan2 profile: the vlan2 bridge has no DHCP, so a
+          # No net-infra100 profile: the infra100 bridge has no DHCP, so a
           # bare attachment is insufficient (instance also needs IP/GW/DNS
           # injected). Use `incus-launch` (scripts/incus-launch.sh) instead
           # — it emits both the device attachment and cloud-init network-
@@ -287,20 +287,20 @@ in {
 
     # Cold-boot race fix, derived uniformly from the host's trunk: without
     # this, incus.service can win the race against the VLAN netdev, create the
-    # vlan2 bridge with no enslaved port, and never retry — leaving every
-    # net-vlan2 instance with no path to the upstream VLAN until incus is
+    # infra100 bridge with no enslaved port, and never retry — leaving every
+    # net-infra100 instance with no path to the upstream VLAN until incus is
     # restarted by hand. Pin incus after the trunk's <iface>-netdev.service.
-    # (Assumes vlan2Trunk is a declared `networking.vlans."<trunk>"` subif.)
-    systemd.services.incus = lib.mkIf (cfg.vlan2Trunk != "") {
-      after = [ "${cfg.vlan2Trunk}-netdev.service" ];
-      wants = [ "${cfg.vlan2Trunk}-netdev.service" ];
+    # (Assumes infra100Trunk is a declared `networking.vlans."<trunk>"` subif.)
+    systemd.services.incus = lib.mkIf (cfg.infra100Trunk != "") {
+      after = [ "${cfg.infra100Trunk}-netdev.service" ];
+      wants = [ "${cfg.infra100Trunk}-netdev.service" ];
     };
 
     networking.firewall.allowedTCPPorts = [ 8443 ];
-    # vlan2 deliberately NOT trusted: the bridge has an IP on VLAN 2, so
+    # infra100 deliberately NOT trusted: the bridge has an IP on VLAN 100, so
     # trusting it would expose pleiades's services to every device on that
     # VLAN — not just containers we own. Containers reach out via the bridge
-    # freely; inbound to pleiades from VLAN 2 still goes through the firewall.
+    # freely; inbound to pleiades from VLAN 100 still goes through the firewall.
     networking.firewall.trustedInterfaces = [ "incusbr0" "prod" ];
   };
 }

@@ -24,16 +24,17 @@
     nameservers  = [ "172.16.1.253" ];
   };
 
-  networking.vlans."enp3s0.2" = {
-    id = 2;
+  networking.vlans."enp3s0.100" = {
+    id = 100;
     interface = "enp3s0";
   };
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.services.incus.enable = true;
-  # This host's VLAN 2 trunk. The incus module enslaves it into the vlan2
-  # bridge and pins incus to start after enp3s0.2-netdev (cold-boot race fix).
-  my.services.incus.vlan2Trunk = "enp3s0.2";
+  # This host's VLAN 100 trunk. The incus module enslaves it into the
+  # 'infra100' bridge and pins incus to start after enp3s0.100-netdev
+  # (cold-boot race fix).
+  my.services.incus.infra100Trunk = "enp3s0.100";
 
   system.stateVersion = "25.11";
 }
