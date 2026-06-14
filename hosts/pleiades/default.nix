@@ -70,6 +70,7 @@
   my.desktop.gnome.enable      = true;
   my.services.xrdp.enable      = true;
   my.services.incus.enable     = true;       # flip off when laptop leaves the cluster
+  my.services.incus.cluster.enable = false; # turning off until we need it
   # This host's VLAN trunks. The incus module enslaves each into its bridge and
   # pins incus to start after the respective <iface>-netdev (cold-boot race fix).
   my.services.incus.infra100Trunk = "dong0.100";

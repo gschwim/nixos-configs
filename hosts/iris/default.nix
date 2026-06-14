@@ -37,6 +37,7 @@
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.services.incus.enable = true;
+  my.services.incus.cluster.enable = false; # we will enable clustering if/when needed
   # This host's VLAN trunks. The incus module enslaves each into its bridge and
   # pins incus to start after the respective <iface>-netdev (cold-boot race fix).
   my.services.incus.infra100Trunk = "enp3s0.100";
