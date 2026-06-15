@@ -254,21 +254,24 @@ in {
 
           { name = "net-incusbr0"; description = "Attach to default NAT bridge"; devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
-          # users1 is a NixOS-managed bridge (modules/networking/static.nix) over
-          # the host's primary NIC — it carries the host's mgmt IP and bridges the
-          # native VLAN (172.16.0.0/16 mgmt segment). So incus does NOT manage it;
-          # instances attach with a `bridged` NIC whose parent is the bridge
-          # (nictype/parent, not network=). If the native VLAN has DHCP, a bare
-          # `-p net-users1` gets an address; otherwise inject one via incus-launch.
+          # net-infra100 / net-cloud104: attach eth0 to the L2-passthrough bridge.
+          # These bridges have NO DHCP, so the profile only does the attachment —
+          # the instance still needs its IP/GW/DNS set (via incus-launch's
+          # cloud-init, or statically inside the instance).
+          { name = "net-infra100"; description = "Attach to infra100 (VLAN 100 L2 pass-through); set IP via incus-launch/cloud-init"; devices.eth0 = { type = "nic"; network = "infra100"; name = "eth0"; }; }
+          { name = "net-cloud104"; description = "Attach to cloud104 (VLAN 104 L2 pass-through); set IP via incus-launch/cloud-init"; devices.eth0 = { type = "nic"; network = "cloud104"; name = "eth0"; }; }
+
+          # net-users1: users1 is a NixOS-managed bridge (modules/networking/static.nix)
+          # over the host's primary NIC — it carries the host's mgmt IP and bridges
+          # the native VLAN. incus does NOT manage it; instances attach with a
+          # `bridged` NIC whose parent is the bridge (nictype/parent, not network=).
+          # If the native VLAN has DHCP, a bare `-p net-users1` gets an address;
+          # otherwise set one inside the instance.
           { name = "net-users1"; description = "Attach to the users1 bridge (host primary NIC native VLAN)"; devices.eth0 = { type = "nic"; nictype = "bridged"; parent = "users1"; name = "eth0"; }; }
 
-          # No net-infra100 / net-cloud104 profile: those L2-passthrough bridges
-          # have no DHCP, so a bare attachment is insufficient (instance also
-          # needs IP/GW/DNS injected). Use `incus-launch` (scripts/incus-launch.sh)
-          # — it emits both the device attachment and cloud-init network-
-          # config in one shot, with stable MAC-based per-NIC matching.
-          # Profile-style attachment also doesn't compose for multi-NIC
-          # (two profiles can't both define eth0).
+          # NOTE: these net-* profiles are single-NIC (each defines eth0, so two
+          # can't compose). For multi-NIC, or one-shot static-IP injection on the
+          # no-DHCP L2 nets, use `incus-launch` (scripts/incus-launch.sh) instead.
 
           { name = "disk-default"; description = "Root disk on default ZFS pool"; devices.root = { type = "disk"; pool = "default"; path = "/"; }; }
 

@@ -20,8 +20,11 @@ Compose multiple profiles on launch — later profiles override same-named devic
 | Bootstrap | `default` | Root disk on `default` pool + `eth0` on `incusbr0`. |
 | | `basebuild01` | Standalone starter: same root + eth0 as `default`, plus cloud-init (apt update/upgrade, openssh-server + neovim + zsh, sudo user with SSH key). Apply alone — no need to also apply `default`. |
 | Network | `net-incusbr0` | `eth0` on `incusbr0` (NAT). |
+| | `net-infra100` | `eth0` on `infra100` (VLAN 100). Attachment only — no DHCP, so set the IP via `incus-launch`/cloud-init or inside the instance. |
+| | `net-cloud104` | `eth0` on `cloud104` (VLAN 104). Same: attachment only, set the IP yourself. |
 | | `net-users1` | `eth0` bridged onto `users1` (host primary NIC, native VLAN 172.16.1.0/24). DHCPs from the LAN if it has DHCP; else inject a static IP. |
-| | _(none for `infra100`/`cloud104`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
+
+These `net-*` profiles are **single-NIC** (each defines `eth0`, so two can't compose) and don't inject an IP on the no-DHCP nets — for multi-NIC or one-shot static-IP injection, use `incus-launch`.
 | Storage | `storage-10GB` / `40GB` / `80GB` / `100GB` | Sized root disk on `default` pool. |
 | | `disk-default` | Root disk on `default` pool, unsized. |
 | CPU | `cpu-1` / `cpu-4` / `cpu-8` | `limits.cpu` =N. |
