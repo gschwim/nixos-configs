@@ -41,6 +41,9 @@
   my.network.static = {
   enable       = true;
   interface    = "dong0";                   # confirm at install
+  bridge       = "users1";                  # mgmt IP lives on the users1 bridge;
+                                            # dong0's native VLAN is shared with
+                                            # incus instances (attach to users1).
   address      = "172.16.1.249";           # placeholder — choose real value
   prefixLength = 24;
   gateway      = "172.16.1.254";
@@ -60,8 +63,12 @@
   };
 
   # The NM auto-exclusion in modules/networking/default.nix only fires for
-  # ifaces with a declared ipv4.addresses; these subifs have none, so name them.
+  # ifaces with a declared ipv4.addresses. The VLAN subifs have none; and dong0
+  # itself is now a bare bridge port (its IP moved to the users1 bridge), so NM
+  # would otherwise try to manage it. Name them all. (users1 holds the IP, so
+  # it's auto-excluded.)
   my.networking.networkmanager.unmanaged = [
+    "interface-name:dong0"
     "interface-name:dong0.100"
     "interface-name:dong0.104"
   ];

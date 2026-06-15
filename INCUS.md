@@ -9,6 +9,7 @@ Quick reference for launching instances on the incus host. The source of truth f
 | `incusbr0` | NAT bridge | auto | yes | yes | Default isolated network. Containers reach the internet via SNAT; no inbound. |
 | `infra100` | L2 bridge over `<iface>.100` | 172.16.0.0/24 | none (set via cloud-init) | no | Pure pass-through (VLAN 100). No IP on the bridge, no dnsmasq. Instances reach the upstream gateway 172.16.0.254 directly. |
 | `cloud104` | L2 bridge over `<iface>.104` | 172.16.4.0/24 | none (set via cloud-init) | no | Pure pass-through (VLAN 104), identical shape to infra100. Upstream gateway 172.16.4.254. |
+| `users1` | **NixOS-managed** bridge over the host's primary NIC (`enp3s0`/`dong0`) | 172.16.1.0/24 (native VLAN) | from the LAN's DHCP, if any | no | **Not an incus-managed network.** The bridge carries the host's own mgmt IP and bridges the native/untagged VLAN (modules/networking/static.nix). Instances join via the `net-users1` profile (a `bridged` NIC, `parent = users1`). |
 
 ## Profile menu
 
@@ -19,6 +20,7 @@ Compose multiple profiles on launch — later profiles override same-named devic
 | Bootstrap | `default` | Root disk on `default` pool + `eth0` on `incusbr0`. |
 | | `basebuild01` | Standalone starter: same root + eth0 as `default`, plus cloud-init (apt update/upgrade, openssh-server + neovim + zsh, sudo user with SSH key). Apply alone — no need to also apply `default`. |
 | Network | `net-incusbr0` | `eth0` on `incusbr0` (NAT). |
+| | `net-users1` | `eth0` bridged onto `users1` (host primary NIC, native VLAN 172.16.1.0/24). DHCPs from the LAN if it has DHCP; else inject a static IP. |
 | | _(none for `infra100`/`cloud104`)_ | L2-passthrough networks have no profile — use `incus-launch` instead. |
 | Storage | `storage-10GB` / `40GB` / `80GB` / `100GB` | Sized root disk on `default` pool. |
 | | `disk-default` | Root disk on `default` pool, unsized. |

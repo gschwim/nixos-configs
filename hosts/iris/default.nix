@@ -18,6 +18,9 @@
   my.network.static = {
     enable       = true;
     interface    = "enp3s0";                   # confirm at install
+    bridge       = "users1";                   # mgmt IP lives on the users1 bridge;
+                                               # enp3s0's native VLAN is shared with
+                                               # incus instances (attach to users1).
     address      = "172.16.1.248";           # placeholder — choose real value
     prefixLength = 24;
     gateway      = "172.16.1.254";

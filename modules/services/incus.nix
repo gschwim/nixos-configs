@@ -254,6 +254,14 @@ in {
 
           { name = "net-incusbr0"; description = "Attach to default NAT bridge"; devices.eth0 = { type = "nic"; network = "incusbr0"; name = "eth0"; }; }
 
+          # users1 is a NixOS-managed bridge (modules/networking/static.nix) over
+          # the host's primary NIC — it carries the host's mgmt IP and bridges the
+          # native VLAN (172.16.0.0/16 mgmt segment). So incus does NOT manage it;
+          # instances attach with a `bridged` NIC whose parent is the bridge
+          # (nictype/parent, not network=). If the native VLAN has DHCP, a bare
+          # `-p net-users1` gets an address; otherwise inject one via incus-launch.
+          { name = "net-users1"; description = "Attach to the users1 bridge (host primary NIC native VLAN)"; devices.eth0 = { type = "nic"; nictype = "bridged"; parent = "users1"; name = "eth0"; }; }
+
           # No net-infra100 / net-cloud104 profile: those L2-passthrough bridges
           # have no DHCP, so a bare attachment is insufficient (instance also
           # needs IP/GW/DNS injected). Use `incus-launch` (scripts/incus-launch.sh)
