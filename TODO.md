@@ -2,6 +2,26 @@
 
 ## Fleet management gaps
 
+### Pet-VM host class (incus VMs as first-class fleet hosts)
+
+Define a host class for **pet VMs** — durable incus VMs managed exactly like
+bare-metal fleet hosts (the boundary is pets-vs-cattle, not metal-vs-VM):
+
+- A normal `hosts/<vmname>/default.nix` + `hardware-configuration.nix`, its own
+  `networking.hostId`, agenix recipient in `secrets.nix` if it needs secrets,
+  managed via `nixctl` / deploy-rs / SSH-CA like any host.
+- A **VM-appropriate disko profile**: plain ext4 root on the virtio disk, *not*
+  the ZFS layout (avoid ZFS-on-a-zvol-on-ZFS). Probably a `my.disko` variant or
+  a small `my.host.role = "vm"`-style toggle.
+- A thin bootstrap helper, e.g. `incus-vm-install <hostname> <net>:<ip>`, that
+  `incus launch`es a VM, injects the admin pubkey + sshd, and hands off to
+  [scripts/install-host.sh](scripts/install-host.sh). kexec works inside a KVM
+  VM, so nixos-anywhere's normal flow is fine (none of the bare-metal kexec grief).
+
+Cattle (immutable, image-built, replace-don't-deploy) go in a **separate repo**
+that imports nixos-configs for shared bits (admin keys, nixpkgs pin); only pets
+live here.
+
 ### deploy-rs push-from-workstation
 
 Plan written at `.claude/plans/ok-next-on-the-sleepy-harbor.md`. Summary:
