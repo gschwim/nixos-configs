@@ -70,7 +70,14 @@ in {
   # reset_method udev rule here — choose it by hand per card under test, e.g.
   #   echo device_specific > /sys/bus/pci/devices/<addr>/reset_method   # AMD Navi
   #   echo flr             > /sys/bus/pci/devices/<addr>/reset_method   # NVIDIA
-  boot.extraModulePackages = [ config.boot.kernelPackages.vendor-reset ];
+  boot.extraModulePackages = [
+    config.boot.kernelPackages.vendor-reset
+    # Realtek RTL8811AU/8821AU USB wifi (e.g. TP-Link Archer T2U Nano, 2357:0120,
+    # which is in this driver's device table). In-tree rtl8xxxu coverage of these
+    # AC600/AC1200 dongles is spotty, so ship the dedicated morrownr driver; it
+    # autoloads via USB modalias when the dongle is plugged in.
+    config.boot.kernelPackages.rtl8821au
+  ];
   boot.kernelModules        = [ "vendor-reset" "vfio-pci" ];
 
   # Mount/inspect installed-OS disks (Windows NTFS/exFAT, etc.). ZFS support is
