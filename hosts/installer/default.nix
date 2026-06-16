@@ -54,7 +54,28 @@ in {
   # Mirror console output to both VGA and serial. The last `console=` is the
   # one systemd uses as the controlling terminal — serial wins, which is
   # what we want for headless VMs.
-  boot.kernelParams = [ "console=tty1" "console=ttyS0,115200n8" ];
+  boot.kernelParams = [
+    "console=tty1" "console=ttyS0,115200n8"
+    # IOMMU on for both CPU vendors so this ISO doubles as a GPU-passthrough /
+    # VFIO test bed on any fleet host; the kernel ignores the non-matching
+    # vendor's flag, and it's harmless on boxes without an IOMMU.
+    "intel_iommu=on" "amd_iommu=on" "iommu=pt"
+  ];
+
+  # GPU-passthrough / reset test-bed gear (additive — the installer's normal
+  # disko/nixos-anywhere flow is untouched). `vendor-reset` provides a working
+  # PCI reset for AMD Polaris/Vega/Navi GPUs (the "AMD reset bug"); it is inert
+  # on NVIDIA/Intel. `vfio-pci` is preloaded so any GPU can be bound to VFIO for
+  # a passthrough test regardless of vendor. We deliberately set NO per-device
+  # reset_method udev rule here — choose it by hand per card under test, e.g.
+  #   echo device_specific > /sys/bus/pci/devices/<addr>/reset_method   # AMD Navi
+  #   echo flr             > /sys/bus/pci/devices/<addr>/reset_method   # NVIDIA
+  boot.extraModulePackages = [ config.boot.kernelPackages.vendor-reset ];
+  boot.kernelModules        = [ "vendor-reset" "vfio-pci" ];
+
+  # Mount/inspect installed-OS disks (Windows NTFS/exFAT, etc.). ZFS support is
+  # already pulled in by the fleet boot/zfs module via mkHost.
+  boot.supportedFilesystems = [ "ntfs" "exfat" ];
 
   # SSH: key-only. Root login is allowed by key (no password) because
   # nixos-anywhere internally pivots to `root@target` to run disko/install
@@ -87,8 +108,12 @@ in {
   my.home-manager.enable = false;
   my.networking.enable   = false;
 
-  # Extra live-environment tools beyond what minimal already includes.
+  # Extra live-environment tools beyond what minimal already includes. This ISO
+  # doubles as a CLI recovery/diagnostic system, so the list is intentionally
+  # broad (disk repair, network/wifi diag, filesystem + boot inspection,
+  # hardware probing). All additive — none of it changes the install workflow.
   environment.systemPackages = with pkgs; [
+    # live-environment basics
     git
     vim
     htop
@@ -97,6 +122,62 @@ in {
     tmux
     installerDashboard
     installerConsole
+
+    # hardware / PCI / USB inspection (also for GPU-passthrough work)
+    pciutils          # lspci
+    usbutils          # lsusb, lsusb -t
+    lshw
+    dmidecode
+    hwinfo
+    lsof
+
+    # disk partition / repair / rescue
+    parted
+    gptfdisk          # gdisk / sgdisk
+    lvm2
+    mdadm
+    ddrescue
+    testdisk          # testdisk + photorec
+    smartmontools
+    nvme-cli
+    hdparm
+
+    # filesystem tooling for inspecting installed OSes
+    ntfs3g
+    exfatprogs
+    dosfstools        # mkfs/fsck.vfat (EFI System Partitions)
+    e2fsprogs
+    btrfs-progs
+    xfsprogs
+    f2fs-tools
+
+    # boot / installed-system inspection & repair
+    efibootmgr
+    os-prober
+
+    # network + wifi diagnostics
+    iw
+    wirelesstools
+    wpa_supplicant
+    ethtool
+    tcpdump
+    nmap
+    mtr
+    traceroute
+    dnsutils          # dig / nslookup
+    iperf3
+    socat
+    curl
+    wget
+
+    # general CLI
+    file
+    tree
+    ripgrep
+    fd
+    rsync
+    pv
+    jq
   ];
 
   # On the physical (tty1) and serial (ttyS0) consoles, drop the autologin
