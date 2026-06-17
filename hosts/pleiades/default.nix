@@ -81,6 +81,9 @@
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
   my.desktop.gnome.enable      = true;
+  my.desktop.kde.enable        = false;
+  my.desktop.displayManager    = "sddm";   # KDE's login manager
+:
   my.services.xrdp.enable      = true;
   my.services.incus.enable     = true;       # flip off when laptop leaves the cluster
   my.services.incus.cluster.enable = false; # turning off until we need it
