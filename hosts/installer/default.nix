@@ -99,6 +99,12 @@ in {
   # Opt out so sshd doesn't try to load a nonexistent HostCertificate file.
   my.services.openssh.useHostCertificate = false;
 
+  # Suppress the first-login fleet bootstrap in schwim's staged ~/.zshrc (the
+  # "clone the fleet repos?" / home-manager prompts). On the installer that
+  # interactive `read` blocks install-host.sh / nixos-anywhere's SSH preflight
+  # from getting a prompt. schwim still gets a working, prompt-free .zshrc.
+  environment.etc."nixos-configs/no-zshrc-bootstrap".text = "";
+
   # Authorize blushda's ed25519 key for both schwim and root.
   # - schwim:  what install-host.sh uses for its preflight (sudo for the
   #            handful of root operations).

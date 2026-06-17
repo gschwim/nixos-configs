@@ -12,6 +12,7 @@
     ./services/openssh.nix
     ./services/xrdp.nix
     ./services/incus.nix
+    ./virtualization/vfio.nix
     ./power/prevent-sleep.nix
     ./secrets.nix
     ./home-manager.nix

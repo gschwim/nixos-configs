@@ -35,6 +35,7 @@
       nixosConfigurations = {
         pleiades   = mkHost { hostName = "pleiades";   system = "x86_64-linux"; };
         iris      = mkHost { hostName = "iris";      system = "x86_64-linux"; };
+        studio    = mkHost { hostName = "studio";    system = "x86_64-linux"; };
         installer = mkHost { hostName = "installer"; system = "x86_64-linux"; };
       };
 

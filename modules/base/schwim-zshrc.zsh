@@ -22,7 +22,10 @@ compinit
 # the next login until done. The homectl run activates HM, which then overwrites
 # this entire file (so this block only runs pre-HM).
 
-if [[ -o login ]] && [[ -t 0 ]]; then
+# The marker lets ephemeral/automated hosts (e.g. the installer ISO) opt out of
+# the interactive bootstrap so an early login shell returns a prompt immediately
+# — otherwise the `read` below blocks nixos-anywhere's SSH preflight.
+if [[ -o login ]] && [[ -t 0 ]] && [[ ! -e /etc/nixos-configs/no-zshrc-bootstrap ]]; then
   __src=$HOME/src
   __repos=(nix-home-manager nixos-configs)
   __hm=$__src/nix-home-manager
