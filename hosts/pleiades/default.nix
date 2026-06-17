@@ -80,8 +80,8 @@
   ];
 
   # Default-on toggles (openssh, networking baseline, home-manager) need no entry.
-  my.desktop.gnome.enable      = true;
-  my.desktop.kde.enable        = false;
+  my.desktop.gnome.enable      = false;
+  my.desktop.kde.enable        = true;
   my.desktop.displayManager    = "sddm";   # KDE's login manager
 
   my.services.xrdp.enable      = true;
