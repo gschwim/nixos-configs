@@ -15,6 +15,11 @@
   # switchable Windows VM. See the passthrough block + winvm below.
   my.host.role = "desktop";
 
+  # Desktop role leaves sleep ON by default, but studio is an always-on VM host
+  # we drive remotely — keep it awake (masks systemd sleep targets, logind idle
+  # actions, AND GNOME's idle-suspend; see modules/power/prevent-sleep.nix).
+  my.power.preventSleep.enable = true;
+
   my.disko = {
     enable   = true;
     # CONFIRM at install with `lsblk`. The box's lone NVMe in Phase 0 was the
