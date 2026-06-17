@@ -43,8 +43,10 @@
 #
 # Prerequisites:
 #   - You have added the host's pubkey to secrets/secrets.nix as a recipient
-#     for any secrets it needs (e.g. wifi-secrets), then run `agenix -r`,
-#     committed, and pushed. This script reminds you and prompts to continue.
+#     for any shared secrets it needs (e.g. add it to wifiAccess). This script
+#     then DETECTS whether those secrets are still stale for this host and runs
+#     scripts/rekey-shared.sh automatically — commit the result afterward.
+#     (Do NOT use `agenix -r`: it fails once any per-host secret exists.)
 #
 # After this script: target reboots fully configured. No second rebuild needed.
 
@@ -122,7 +124,7 @@ if grep -q "REPLACE_WITH_${HOSTNAME_UPPER}_HOST_PUBKEY" "$REPO_ROOT/secrets/secr
   echo "         If $HOSTNAME needs to decrypt any agenix secret on first boot,"
   echo "         you must (1) generate its host key here first, (2) paste the pubkey"
   echo "         into secrets/secrets.nix, (3) add it to the relevant publicKeys"
-  echo "         lists, (4) run 'agenix -r' from the secrets/ directory,"
+  echo "         lists, (4) run scripts/rekey-shared.sh (NOT 'agenix -r'),"
   echo "         (5) commit and push BEFORE continuing."
   echo
   read -rp "Continue anyway? (y/N) " ans
@@ -240,6 +242,38 @@ install -m 400 -o root -g root "$BOOT_KEY" "$STAGING/etc/age/host.key" 2>/dev/nu
   || install -m 400 "$BOOT_KEY" "$STAGING/etc/age/host.key"
 # (Fallback for macOS where -o root requires sudo we don't want; mode 400
 # is preserved either way and nixos-anywhere chowns to root on the target.)
+
+# ----- ensure shared secrets are encrypted to this host --------------------
+# age hides a file's recipients, so we can't read whether $HOSTNAME is listed in
+# a given *.age. Instead we DETECT staleness: for each secret secrets.nix
+# declares $HOSTNAME a recipient of, try to decrypt the live blob with this
+# host's bootstrap key. A failure means the blob predates $HOSTNAME's addition
+# to that list → rekey the shared ones (per-host blobs are already fresh from
+# gen-host-key, and the host can already decrypt them, so they aren't flagged).
+HOST_AGE_PUB="$(grep -oE 'age1[0-9a-z]+' "$BOOT_KEY" | head -n1)"
+if [ -n "$HOST_AGE_PUB" ]; then
+  AGE_BIN="$(nix --extra-experimental-features 'nix-command flakes' \
+    build nixpkgs#age --no-link --print-out-paths 2>/dev/null)/bin/age"
+  stale=0
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    if ! "$AGE_BIN" -d -i "$BOOT_KEY" "$REPO_ROOT/secrets/$s" >/dev/null 2>&1; then
+      echo "  secret '$s' is not yet encrypted to $HOSTNAME"
+      stale=1
+    fi
+  done < <(nix --extra-experimental-features 'nix-command flakes' eval --impure --raw \
+    --expr "let s = import \"$REPO_ROOT/secrets/secrets.nix\";
+                names = builtins.attrNames s;
+                mine = builtins.filter (n: builtins.elem \"$HOST_AGE_PUB\" ((s.\${n}.publicKeys or []))) names;
+            in builtins.concatStringsSep \"\n\" mine" 2>/dev/null || true)
+  if [ "$stale" = 1 ]; then
+    echo "Rekeying shared secrets so $HOSTNAME can decrypt them …"
+    "$REPO_ROOT/scripts/rekey-shared.sh"
+    echo "NOTE: secrets/*.age were updated — they deploy in THIS install (nix"
+    echo "      includes the dirty working tree), but commit them afterward:"
+    echo "        git add secrets/*.age && git commit -m '$HOSTNAME: rekey shared secrets'"
+  fi
+fi
 
 # Repo artifacts (SSH host pub + cert + agenix-encrypted priv) — sanity-check
 # they exist; if they don't, the closure won't build. They aren't staged via
