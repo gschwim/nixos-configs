@@ -14,8 +14,14 @@
 
   # Acting as a 24/7 server (incus host), even though the hardware is a
   # laptop. Drives preventSleep on by default and any future server defaults.
-  my.host.role = "server";
+  my.host.role = "desktop";
   my.host.management.enable = true;          # pleiades runs the fleet incus cluster
+
+  # Desktop role leaves sleep ON by default, but studio is an always-on VM host
+  # we drive remotely — keep it awake (masks systemd sleep targets, logind idle
+  # actions, AND GNOME's idle-suspend; see modules/power/prevent-sleep.nix).
+  my.power.preventSleep.enable = true;
+
 
   my.disko = {
     enable   = true;
