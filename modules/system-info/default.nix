@@ -21,6 +21,7 @@ let
 
   desktopEnv =
     if config.my.desktop.gnome.enable then "gnome"
+    else if config.my.desktop.kde.enable then "kde"
     else                                   "none";
 
   rebuildCommit =

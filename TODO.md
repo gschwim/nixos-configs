@@ -67,6 +67,19 @@ one-line purpose + usage and a link to source:
 - `makeiso` ([scripts/makeiso.sh](scripts/makeiso.sh)) — build/flash the installer ISO.
 - `gen-host-key`, `install-host`, `new-host`, `provision-user-key`, `trust-ssh-ca` ([scripts/](scripts/)).
 
+### Generate a host-level options reference
+
+There's no single document listing every `my.*` option a host can set in its
+`default.nix` — README mentions a few in passing, but there's no complete
+reference. Generate one from the module `option` declarations so every knob is
+discoverable in one place:
+
+- Either render with `nixos-render-docs` from the evaluated `options.my.*`, or a
+  small `nix eval` that walks `options.my` and prints `name · type · default ·
+  description` for the whole `my.*` tree, emitted to `docs/options.md` (or a
+  README section). Wire it as a flake `apps`/check entry so it stays current as
+  modules add options.
+
 ### Incus preseed reconciliation
 
 `virtualisation.incus.preseed` is one-shot — `incus admin init --preseed` initializes a fresh incus but does not reconcile against existing state. When the preseed in nix changes (e.g., a network or profile is added, removed, or modified) and `nixos-rebuild switch` is run, the *file* updates but the *live incus state* stays stale. Manual sync via `incus network edit` / `incus profile edit` / `incus network unset` is currently required after every relevant rebuild.
@@ -136,4 +149,10 @@ Hard-coded "Greg Schwimer" and "7e7":
 - [starting-configs/configuration.nix.old](starting-configs/configuration.nix.old)
 
 **Risk:** none. Safe to delete the entire directory.
+
+## Secrets for host info
+
+Right now we are placing things like IPs directly in a host's default.nix. This gives some information about the infrastructure away. Might be best to treat this as secrets.
+
+What other things should we be storing as secrets?
 

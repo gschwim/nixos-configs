@@ -1,41 +1,48 @@
+# GNOME desktop environment — GNOME-specific bits only.
+#
+# Shared desktop infra (xserver, display manager, audio, printing, browser) lives
+# in modules/desktop/default.nix and activates whenever any DE is on.
+#
+# Remote access: xrdp (modules/services/xrdp.nix) is the DE-agnostic primary — it
+# serves a fresh X11 session for whatever DE the host runs. GNOME ALSO keeps its
+# native gnome-remote-desktop here (the GNOME module enables it by default); it
+# shares the *live* session on demand and does not bind RDP/3389 unless you turn
+# on Settings → Sharing, so the two coexist without conflict.
+
 { config, lib, pkgs, ... }:
 let
   cfg = config.my.desktop.gnome;
 in {
   options.my.desktop.gnome = {
-    enable = lib.mkEnableOption "GNOME desktop environment (GDM, Pipewire, printing, Firefox)";
+    enable = lib.mkEnableOption "GNOME desktop environment";
   };
 
   config = lib.mkIf cfg.enable {
-    services.xserver.enable           = true;
-    services.xserver.xkb.layout       = "us";
-    services.displayManager.gdm.enable = true;
     services.desktopManager.gnome.enable = true;
 
+    # GNOME's native remote desktop (live-session sharing, on-demand). Kept
+    # alongside xrdp; see the header note. Explicit here to make intent clear
+    # even though the GNOME module also enables it by default.
     services.gnome.gnome-remote-desktop.enable = true;
 
-    services.printing.enable = true;
-
-    services.pulseaudio.enable = false;
-    security.rtkit.enable      = true;
-    services.pipewire = {
-      enable            = true;
-      alsa.enable       = true;
-      alsa.support32Bit = true;
-      pulse.enable      = true;
-    };
-
-    programs.firefox.enable = true;
+    # GNOME is only supported behind GDM (NixOS GNOME wiki). Guard against an
+    # accidental SDDM override on a GNOME host.
+    assertions = [{
+      assertion = config.my.desktop.displayManager == "gdm";
+      message   = ''
+        GNOME (my.desktop.gnome.enable) requires my.desktop.displayManager = "gdm";
+        GNOME on a non-GDM login manager is unsupported.
+      '';
+    }];
 
     environment.systemPackages = with pkgs; [
-      gnome-remote-desktop
+      gnome-remote-desktop           # grdctl + the daemon package
       gnomeExtensions.appindicator   # legacy tray icons (Dropbox, Slack, etc.)
     ];
 
-    # Fleet-wide GNOME defaults. Applied via dconf's system database, so
-    # every user inherits these on first login but can still override per-
-    # user with gsettings / GNOME Settings. NOT locks — these are defaults,
-    # not policy.
+    # Fleet-wide GNOME defaults. Applied via dconf's system database, so every
+    # user inherits these on first login but can still override per-user with
+    # gsettings / GNOME Settings. NOT locks — these are defaults, not policy.
     programs.dconf.profiles.user.databases = [{
       settings = with lib.gvariant; {
         "org/gnome/desktop/peripherals/touchpad" = {

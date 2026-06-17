@@ -8,7 +8,7 @@
     ./networking/static.nix
     ./networking/wireless.nix
     ./networking/wifi-profiles.nix
-    ./desktop/gnome.nix
+    ./desktop
     ./services/openssh.nix
     ./services/xrdp.nix
     ./services/incus.nix

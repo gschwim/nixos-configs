@@ -41,8 +41,14 @@ in {
       type    = lib.types.enum [ "server" "desktop" ];
       default = "desktop";
       description = ''
-        Describes how this host is USED, not its hardware. Drives defaults
-        in other modules (currently: power/sleep behavior; will expand).
+        Describes how this host is USED, not its hardware. Drives behavioral
+        defaults in other modules (currently: power/sleep behavior; will expand).
+
+        Capabilities (services like incus, and the desktop environment) are
+        deliberately NOT gated by role today — server and desktop share one base,
+        and any host can enable any capability. Role only stages behavioral
+        defaults. We keep the option open to add role-conditional behavior later
+        (server-only / desktop-only) as a deliberate choice, not a rule.
 
           - "server":  headless / always-on. Sleep/suspend disabled by default.
                        A laptop kept on as a fileserver is `role = "server"`.
