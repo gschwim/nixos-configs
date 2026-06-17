@@ -121,13 +121,14 @@ let
   # allAccess: the shared base — recipients that should decrypt every
   # secret. Editor workstations and any host that should run `agenix -e`.
   example-host = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMWlfo53RiBjMA5oOH/617geQzieNm+IAb221SioIHcC";
+  studio = "age1wvuj9gzaj8lq9em9xx59ps958xjvscvg0alk5yepgyy2p3sdgvvs49eeuy";
   allAccess  = realKeys [ blushda pleiades ];
 
   # Per-secret access lists. Each is the COMPLETE recipient set for that
   # secret (allAccess + whoever else needs it), so the publicKeys line
   # below is just `= <name>Access;`. Reading the variable definition
   # answers "who can decrypt this secret?" in one place.
-  wifiAccess = allAccess ++ realKeys [ iris ];
+  wifiAccess = allAccess ++ realKeys [ iris studio ];
 
   # Per-host "decrypt only by this host" access lists. Used for any secret
   # whose plaintext should never be readable from anywhere other than the
@@ -137,6 +138,7 @@ let
   # and write a fresh encrypted blob.
   pleiadesOnly = realKeys [ pleiades ];
   irisOnly     = realKeys [ iris ];
+  studioOnly   = realKeys [ studio ];
 in {
   "wifi-secrets.age".publicKeys = wifiAccess;
 
@@ -149,4 +151,5 @@ in {
   # places at /etc/ssh/ssh_host_ed25519_key via modules/services/openssh.nix.
   "host-keys/pleiades_ssh_host_ed25519_key.age".publicKeys = pleiadesOnly;
   "host-keys/iris_ssh_host_ed25519_key.age".publicKeys     = irisOnly;
+  "host-keys/studio_ssh_host_ed25519_key.age".publicKeys   = studioOnly;
 }
