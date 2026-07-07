@@ -2,7 +2,18 @@
 
 ## Fleet management gaps
 
-### Pet-VM host class (incus VMs as first-class fleet hosts)
+### Cattle NixOS guests — DONE (see INCUS.md → "NixOS guests (cattle)")
+
+Disposable NixOS Docker VMs are now supported: one golden image
+([guests/base.nix](guests/base.nix), flake attr `guest`, built by
+[lib/mkGuest.nix](lib/mkGuest.nix)) launched as identical throwaway instances via
+[scripts/incus-guest.sh](scripts/incus-guest.sh) (`incus-guest build` /
+`incus-guest launch`). This intentionally deviates from the "cattle in a separate
+repo" note below — they live here so they inherit the admin keys + home-manager
+tooling from `modules/base`. The **pet-VM** class below is a separate, still-open
+idea (durable VMs as full `hosts/` entries); it is NOT what the cattle guests do.
+
+### Pet-VM host class (incus VMs as first-class fleet hosts) — not pursued yet
 
 Define a host class for **pet VMs** — durable incus VMs managed exactly like
 bare-metal fleet hosts (the boundary is pets-vs-cattle, not metal-vs-VM):

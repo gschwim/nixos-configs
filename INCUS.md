@@ -129,6 +129,64 @@ incus snapshot create web01 pre-upgrade
 incus snapshot restore web01 pre-upgrade
 ```
 
+## NixOS guests (cattle)
+
+The instances above are launched from upstream images (`ubuntu:…`, `images:…`).
+For **NixOS** guests we run a different model: a single golden image built from
+this repo, launched as many disposable, identical **cattle** VMs — the intended
+home for **Docker workloads**. They are *not* fleet pets: no `hosts/<name>/` dir,
+no per-guest hostId, no per-guest agenix key or SSH-CA. Replace, don't babysit.
+
+The config is [guests/base.nix](guests/base.nix) (flake attr
+`nixosConfigurations.guest`, built by [lib/mkGuest.nix](lib/mkGuest.nix)): Docker
+enabled, and the admin SSH keys + standalone home-manager CLI + tooling inherited
+from [modules/base](modules/base/default.nix) — so **SSH access and
+home-manager behave exactly as on the pets** (`ssh schwim@<guest>` with your
+existing key; `home-manager switch --flake <dotfiles-repo>#<attr>` inside).
+
+VMs (not containers) so Docker "just works" — own kernel, overlay2, no
+`security.nesting`/fuse-overlayfs-on-ZFS grief.
+
+### Build once, launch many
+
+Run on the **incus host** (a Linux x86_64 box — the Mac can't build
+x86_64-linux). `incus-guest` is installed system-wide wherever
+`my.services.incus.enable = true` (source: [scripts/incus-guest.sh](scripts/incus-guest.sh)).
+
+```bash
+cd ~/src/nixos-configs
+incus-guest build                       # nix build + incus image import (alias: nixos-guest)
+incus-guest launch dock01               # NAT (incusbr0/DHCP), zero-config
+incus-guest launch dock02 -- -p storage-80GB -p mem-8GB   # compose profiles
+```
+
+Static IP on an L2 network reuses the existing helper — the golden image is just
+a local alias:
+
+```bash
+incus-launch dock03 nixos-guest --vm infra100:172.16.0.60 -- -p mem-4GB
+```
+
+### Verify
+
+```bash
+incus list dock01                                  # Running, has an IPv4
+incus exec dock01 -- docker run --rm hello-world   # "Hello from Docker!"
+incus exec dock01 -- sudo -u schwim home-manager --version
+ssh schwim@<dock01-ip> -- docker ps                # your admin key gets you in
+incus delete --force dock01                        # teardown is trivial (cattle)
+```
+
+> **Ephemeral state.** Replacing a guest destroys its root disk. Put Docker
+> volumes / app data on a **separate incus disk device or bind mount**, never the
+> root. To ship a new base (docker/tooling/HM change): edit `guests/base.nix`,
+> `incus-guest build` (re-imports over the alias), then relaunch — don't
+> `nixos-rebuild` in place (that's the pet path).
+
+> **Host key is not CA-signed.** Cattle present an ephemeral host key (fresh per
+> instance), so you get a TOFU / "new host key" prompt rather than the pets'
+> CA-verified silent connect. `incus exec` sidesteps SSH entirely.
+
 ## Clustering (`orion-1`)
 
 Cluster membership is defined in **one place** — [lib/incus-clusters.nix](lib/incus-clusters.nix):

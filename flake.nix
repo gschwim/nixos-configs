@@ -30,13 +30,18 @@
 
   outputs = inputs@{ self, nixpkgs, nixos-images, ... }:
     let
-      mkHost = import ./lib/mkHost.nix inputs;
+      mkHost  = import ./lib/mkHost.nix inputs;
+      mkGuest = import ./lib/mkGuest.nix inputs;
     in {
       nixosConfigurations = {
         pleiades   = mkHost { hostName = "pleiades";   system = "x86_64-linux"; };
         iris      = mkHost { hostName = "iris";      system = "x86_64-linux"; };
         studio    = mkHost { hostName = "studio";    system = "x86_64-linux"; };
         installer = mkHost { hostName = "installer"; system = "x86_64-linux"; };
+
+        # Cattle NixOS guest — the golden image for disposable incus Docker VMs.
+        # Build + import + launch via `incus-guest` (scripts/incus-guest.sh).
+        guest      = mkGuest { system = "x86_64-linux"; };
       };
 
       # Dual-console kexec-installer image (serial ttyS0 + VGA tty0). The stock

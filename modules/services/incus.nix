@@ -307,6 +307,9 @@ in {
     #
     # incus-cluster: drives the imperative cluster steps (enable/token/join/
     # leave) from the central topology. Source: scripts/incus-cluster.
+    #
+    # incus-guest: builds + imports + launches cattle NixOS guests (disposable
+    # Docker VMs from the flake's `guest` config). Source: scripts/incus-guest.sh.
     environment.systemPackages = [
       (pkgs.writeShellApplication {
         name = "incus-launch";
@@ -320,6 +323,11 @@ in {
         # values we intend to expand client-side before sending — that's the point.
         excludeShellChecks = [ "SC2029" ];
         text = builtins.readFile ../../scripts/incus-cluster;
+      })
+      (pkgs.writeShellApplication {
+        name = "incus-guest";
+        runtimeInputs = with pkgs; [ incus nix coreutils findutils ];
+        text = builtins.readFile ../../scripts/incus-guest.sh;
       })
     ];
 
