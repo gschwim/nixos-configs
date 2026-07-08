@@ -5,3 +5,10 @@ result-*
 
 # Nix build artifacts copied into the tree (e.g. kexec image tarball)
 *.tar.gz
+
+# Local, machine-only guest overlays (the .zlocal pattern). One-offs live here
+# and are layered via `incus-guest build --extra-module`; promote to
+# guests/workloads/ to share. Only the README/.gitkeep are tracked.
+/guests/local/*
+!/guests/local/README.md
+!/guests/local/.gitkeep

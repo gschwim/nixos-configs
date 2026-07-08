@@ -2,6 +2,24 @@
 
 ## Fleet management gaps
 
+### Guest composition — future directions (see docs/guests.md)
+
+The L0/L1/L2 guest model (base + overlays + instance params), breeds, and the
+local-overlay/promotion machinery are built. Deferred, deliberately:
+
+- **Automate rehydration.** Bringing off-host config/data back onto a freshly
+  reconstituted host is currently a **manual** step. Fine for a small fleet that
+  rarely loses a host; automate (a declarative boot-time pull) only if that changes.
+- **`my.guest.<workload>.enable` toggle namespace** (mirror `my.services.*`) if
+  overlay composition gets rich enough to warrant self-documenting toggles.
+- **Composable-multi-overlay vs one-overlay-per-breed** — decide once there's more
+  than one real workload. The `mkGuest { extraModules = [ … ]; }` list already
+  supports both, so this is a convention call, not a code change.
+- **Extend the local-overlay + promotion pattern to `hosts/`** (metal/named boxes)
+  so the whole fleet shares one composition model. Touches existing host structure,
+  so held until we're ready to restructure there.
+- Cosmetic: rename `mkGuest`'s `extraModules` arg → `overlays` for shared vocab.
+
 ### Cattle NixOS guests — DONE (see INCUS.md → "NixOS guests (cattle)")
 
 Disposable NixOS Docker VMs are now supported: one golden image

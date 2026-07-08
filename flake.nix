@@ -41,8 +41,16 @@
 
         # Cattle NixOS guest — the golden image for disposable incus Docker VMs.
         # Build + import + launch via `incus-guest` (scripts/incus-guest.sh).
+        # Breeds (base + committed overlays from guests/workloads/) are added as
+        # siblings here, e.g.:
+        #   guest-hermes = mkGuest { extraModules = [ ./guests/workloads/hermes.nix ]; };
         guest      = mkGuest { system = "x86_64-linux"; };
       };
+
+      # Exposed so `incus-guest build --extra-module <path>` can layer a
+      # gitignored local overlay onto the base via an impure expr (a flake attr
+      # can't see an untracked file). See docs/guests.md and scripts/incus-guest.sh.
+      lib.mkGuest = mkGuest;
 
       # Dual-console kexec-installer image (serial ttyS0 + VGA tty0). The stock
       # nixos-images kexec image logs to serial only, so a kexec install that

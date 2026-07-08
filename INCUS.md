@@ -147,6 +147,10 @@ existing key; `home-manager switch --flake <dotfiles-repo>#<attr>` inside).
 VMs (not containers) so Docker "just works" — own kernel, overlay2, no
 `security.nesting`/fuse-overlayfs-on-ZFS grief.
 
+> For how guests are *composed* (base + workload overlays, breeds, the local
+> `.zlocal` overlay pattern, and promotion), see [docs/guests.md](docs/guests.md).
+> This section is the operational runbook; that doc is the model.
+
 ### Build once, launch many
 
 Run on the **incus host** (a Linux x86_64 box — the Mac can't build
