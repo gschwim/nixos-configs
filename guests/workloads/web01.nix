@@ -74,7 +74,8 @@ let
 
   # Common to every public vhost: HTTPS only (http → 301, except the ACME
   # challenge path, which NixOS keeps on :80).
-  tls = { forceSSL = true; } // acme;
+  # HTTP/1.1 only, as on fw02 (it never enabled http2).
+  tls = { forceSSL = true; http2 = false; } // acme;
 
   # sundries windbarb API proxies (fw02: same block for metar/taf/mos).
   # fw02 used `resolver 127.0.0.1` (its local BIND); web01's local resolver is
@@ -105,6 +106,9 @@ in
   # Named instance: pin the hostname cloud-init gave it at launch, so a
   # nixos-rebuild switch doesn't revert it to the NixOS default ("nixos").
   networking.hostName = "web01";
+
+  # fw02's zone; sundries /files/ listings use autoindex_localtime.
+  time.timeZone = "America/Phoenix";
 
   # Let wheel (schwim, finn) push store paths for `nixos-rebuild
   # --target-host`. Wheel already has passwordless sudo, so this grants
