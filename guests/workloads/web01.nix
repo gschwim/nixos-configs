@@ -138,6 +138,8 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/web01-certs 0750 root nginx -"   # fallback cert dir (empty unless used)
     "d /var/www 0755 root root -"
+    # 7e7.co static mirror: Ferb rsyncs it himself (no sudo).
+    "d /var/www/7e7.co 0755 ferb users -"
   ];
 
   services.nginx = {
@@ -322,6 +324,31 @@ in
             proxy_cache             allsky;
           '';
         };
+      };
+
+      # 7e7.co (Ferb's site). Content is Ferb's static mirror in
+      # /var/www/7e7.co; its top-level index.html redirects / to /www.7e7.co/.
+      "www.7e7.co" = tls // {
+        root = "/var/www/7e7.co";
+        extraConfig = ''
+          index index.html;
+        '';
+        locations = {
+          "/".tryFiles = "$uri $uri/ =404";
+          # Block dotfiles; ACME's ^~ prefix location still wins for
+          # /.well-known/acme-challenge/.
+          "~ /\\." = {
+            priority    = 999;
+            extraConfig = ''
+              deny all;
+            '';
+          };
+        };
+      };
+
+      # Apex → canonical www.
+      "7e7.co" = tls // {
+        locations."/".return = "301 https://www.7e7.co$request_uri";
       };
 
       # Signal → Obsidian helper.
