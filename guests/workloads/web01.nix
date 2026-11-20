@@ -25,15 +25,30 @@
 # storage-40GB then resizes the root disk. Gateway 172.16.0.254 and DNS
 # 172.16.1.253 come from the NET_* table in scripts/incus-launch.sh.)
 #
-# Content: static roots live under /var/www/<site>, NOT in the store and NOT
+# Content: static roots live under /var/www/<dir>, NOT in the store and NOT
 # in this repo. After launch, push them from the staged fw02 copy on grokhq01
 # (Finn has sudo on web01):
 #
-#   rsync -a --rsync-path="sudo rsync" --chown=root:root --chmod=D755,F644 \
-#     ~finn/web01-staging/www/ finn@172.16.0.240:/var/www/
+#     SSH="ssh -i ~/.ssh/web01_deploy -o IdentitiesOnly=yes"
+#     cd ~finn/web01-staging/www
+#     rsync -a --delete --rsync-path="sudo rsync" --chown=root:root \
+#       --chmod=D755,F644 -e "$SSH" sundries adventure_game allsky \
+#       finn@172.16.0.240:/var/www/
+#     # alyssadowdell.com: site files only (what its Dockerfile ships, plus
+#     # robots.txt/sitemap.xml). Never .git, Dockerfile or build files.
+#     rsync -a --delete --rsync-path="sudo rsync" --chown=root:root \
+#       --chmod=D755,F644 -e "$SSH" --include=/index.html --include=/styles.css \
+#       --include=/robots.txt --include=/sitemap.xml --include=/images/*** \
+#       --exclude='*' alyssadowdell.com/ finn@172.16.0.240:/var/www/alyssadowdell.com/
 #
-# Dirs: adventure_game, allsky, alyssadowdell.com, sundries. A rebuilt guest
-# loses its root disk, so re-run the rsync after any relaunch.
+#   fw02's live alyssadowdell.com index.html is NOT what's committed in
+#   gschwim/allys-website (HEAD 42a24ef), so it isn't built from the repo.
+#   A rebuilt guest loses its root disk, so re-run the rsync after any relaunch.
+#
+# Deploy config changes from a commit on grokhq01 (finn's web01_deploy key):
+#   NIX_SSHOPTS="-i ~/.ssh/web01_deploy -o IdentitiesOnly=yes" \
+#     nixos-rebuild switch --flake .#web01 \
+#     --target-host finn@172.16.0.240 --sudo
 #
 # TLS: every vhost uses NixOS ACME (HTTP-01 via the webroot nginx serves on
 # :80) with forceSSL (http → 301 https, as fw02 does). Until the router
@@ -86,6 +101,10 @@ let
   '';
 in
 {
+  # Named instance: pin the hostname cloud-init gave it at launch, so a
+  # nixos-rebuild switch doesn't revert it to the NixOS default ("nixos").
+  networking.hostName = "web01";
+
   # No Docker on this breed (default-on for guests via guests/base.nix).
   my.services.docker.enable = false;
 
@@ -218,6 +237,14 @@ in
             expires 7d;
             add_header Cache-Control "public";
           '';
+          # Not on fw02 (it served .git). Block dotfiles; ACME's ^~ prefix
+          # location still wins for /.well-known/acme-challenge/.
+          "~ /\\." = {
+            priority    = 999;
+            extraConfig = ''
+              deny all;
+            '';
+          };
         };
       };
 

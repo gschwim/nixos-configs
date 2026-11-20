@@ -43,6 +43,9 @@
       extraGroups  = [ "wheel" ];   # admin bot: passwordless sudo via base wheelNeedsPassword=false
       openssh.authorizedKeys.keys = [
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBMz2qbHIFb71rdfNSez8tECV0WJurCh0V+ere1DULJR finn@grokbot"
+        # grokhq01 finn's deploy key (nixos-rebuild --target-host, content
+        # pushes). Private key in KeePass "SSH/finn_web01_deploy (grokhq01)".
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA6f5OF/9iaZA2x+3LPQHGgHMINiGXs4CjPeYjjWRVk/ finn@grokhq01-web01-deploy"
       ];
     };
 
