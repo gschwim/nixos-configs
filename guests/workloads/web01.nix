@@ -110,6 +110,8 @@ in
 {
   # 7e7.co contact-form backend (127.0.0.1:8790, proxied at www.7e7.co/api/contact).
   imports = [ ./7e7-contact.nix ];
+  # Off until the form JS is enabled (Greg, 2026-11-20).
+  my.services.e7contact.enable = false;
 
   # Named instance: pin the hostname cloud-init gave it at launch, so a
   # nixos-rebuild switch doesn't revert it to the NixOS default ("nixos").
