@@ -110,8 +110,9 @@ in
 {
   # 7e7.co contact-form backend (127.0.0.1:8790, proxied at www.7e7.co/api/contact).
   imports = [ ./7e7-contact.nix ];
-  # Off until the form JS is enabled (Greg, 2026-11-20).
-  my.services.e7contact.enable = false;
+  # On (Greg GO 2026-11-20 15:48 MST). Set false to stop it; nginx then
+  # answers /api/contact with 502.
+  my.services.e7contact.enable = true;
 
   # Named instance: pin the hostname cloud-init gave it at launch, so a
   # nixos-rebuild switch doesn't revert it to the NixOS default ("nixos").
@@ -199,12 +200,15 @@ in
 
       # 7e7.co contact form: rate-limit POSTs per client IP (GETs carry an
       # empty key and are not limited; the form fetches its fill-time token
-      # with a GET).
+      # with a GET). nginx rates are per second or per minute only (5r/h is
+      # rejected), so nginx allows a burst of 3 then 1/min per IP; the
+      # backend enforces 5 per hour per IP (CONTACT_RATE_PER_IP /
+      # CONTACT_RATE_WINDOW) and answers 429 JSON itself.
       map $request_method $contact_limit_key {
           POST    $binary_remote_addr;
           default "";
       }
-      limit_req_zone $contact_limit_key zone=contact:10m rate=5r/m;
+      limit_req_zone $contact_limit_key zone=contact:10m rate=1r/m;
     '';
     # No HSTS anywhere (fw02 has none).
 
@@ -410,7 +414,7 @@ in
           "= /404".return = "404";
 
           # Contact form backend (./7e7-contact.nix). POST-only rate limit
-          # (zone `contact` above), 32k body cap, JSON errors.
+          # (zone `contact` above: burst 3, then 1/min), 32k body cap, JSON errors.
           "= /api/contact".extraConfig = ''
             limit_except GET POST { deny all; }
             limit_req zone=contact burst=3 nodelay;
@@ -419,8 +423,11 @@ in
             error_page 413 = @contact_too_large;
             error_page 429 = @contact_rate_limited;
             proxy_pass http://127.0.0.1:8790;
-            proxy_set_header Host      $host;
-            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header Host            $host;
+            proxy_set_header X-Real-IP       $remote_addr;
+            # Overwrite (do not append) so a client-supplied X-Forwarded-For
+            # is never trusted by the backend.
+            proxy_set_header X-Forwarded-For $remote_addr;
             proxy_read_timeout 45s;
           '';
           "@contact_too_large".extraConfig = ''
