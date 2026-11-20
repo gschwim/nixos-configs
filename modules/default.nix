@@ -1,6 +1,7 @@
 {
   imports = [
     ./base
+    ./users.nix
     ./host.nix
     ./boot/zfs.nix
     ./disko

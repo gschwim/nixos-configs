@@ -1,7 +1,5 @@
 { pkgs, ... }:
-let
-  adminKeys = import ../../lib/admin-keys.nix;
-in {
+{
   nix.extraOptions = ''
     experimental-features = nix-command flakes
   '';
@@ -21,16 +19,9 @@ in {
     LC_TIME           = "en_US.UTF-8";
   };
 
-  users.users.schwim = {
-    isNormalUser = true;
-    description  = "Greg Schwimer";
-    extraGroups  = [ "networkmanager" "wheel" "incus-admin" ];
-    openssh.authorizedKeys.keys = adminKeys;
-    # One-time login password. Expired immediately by the activation script
-    # below, so PAM forces a change on first login (GDM, console, or SSH).
-    initialPassword = "changeme";
-    shell = pkgs.zsh;
-  };
+  # The schwim account itself (groups, keys, shell, one-time password) comes
+  # from the user catalog, lib/users.nix, via modules/users.nix — it's in the
+  # "admins" set, which every host gets by default (my.users.sets).
 
   # Force schwim to change the initial password on first login. `chage -d 0`
   # marks it as last-changed at epoch, which PAM treats as expired. Runs once;

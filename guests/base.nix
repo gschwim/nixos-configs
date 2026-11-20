@@ -14,13 +14,14 @@
 
 { config, lib, pkgs, ... }:
 {
-  # schwim user + admin SSH keys (lib/admin-keys.nix) + fleet tooling, INCLUDING
+  # schwim user (lib/users.nix catalog via ../modules/users.nix; admin SSH keys
+  # from lib/admin-keys.nix) + fleet tooling, INCLUDING
   # the standalone home-manager CLI and the staged ~/.zshrc bootstrap. Importing
   # this is what makes SSH access and home-manager behave IDENTICALLY to the pets
   # (see the plan). Deliberately NOT importing ../modules/services/openssh.nix
   # (CA/agenix host-key machinery — pet-only) or setting my.home-manager.enable
   # (that would bind the home/schwim.nix placeholder and break HM parity).
-  imports = [ ../modules/base ../modules/services/docker.nix ];
+  imports = [ ../modules/base ../modules/users.nix ../modules/services/docker.nix ];
 
   # Docker workloads: default-on for guests. A breed that doesn't want Docker
   # sets `my.services.docker.enable = false;` in its own overlay.
