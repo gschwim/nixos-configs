@@ -334,6 +334,8 @@ in
           index index.html;
         '';
         locations = {
+          # The site lives under /www.7e7.co/ (static mirror layout).
+          "= /".return = "301 /www.7e7.co/";
           "/".tryFiles = "$uri $uri/ =404";
           # Block dotfiles; ACME's ^~ prefix location still wins for
           # /.well-known/acme-challenge/.
@@ -346,8 +348,13 @@ in
         };
       };
 
-      # Apex → canonical www.
-      "7e7.co" = tls // {
+      # Apex → canonical www, in one hop on both :80 and :443. addSSL (not
+      # forceSSL) keeps the same server on :80, so the redirect isn't a
+      # second http→https hop; NixOS still serves the ACME challenge
+      # location on :80 for this name.
+      "7e7.co" = acme // {
+        addSSL = true;
+        http2  = false;
         locations."/".return = "301 https://www.7e7.co$request_uri";
       };
 
