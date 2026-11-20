@@ -45,7 +45,8 @@
 #   gschwim/allys-website (HEAD 42a24ef), so it isn't built from the repo.
 #   A rebuilt guest loses its root disk, so re-run the rsync after any relaunch.
 #
-# Deploy config changes from a commit on grokhq01 (finn's web01_deploy key):
+# Deploy config changes from a commit on grokhq01 (finn's web01_deploy key;
+# wheel is a nix trusted-user below, so the closure copy is accepted):
 #   NIX_SSHOPTS="-i ~/.ssh/web01_deploy -o IdentitiesOnly=yes" \
 #     nixos-rebuild switch --flake .#web01 \
 #     --target-host finn@172.16.0.240 --sudo
@@ -104,6 +105,11 @@ in
   # Named instance: pin the hostname cloud-init gave it at launch, so a
   # nixos-rebuild switch doesn't revert it to the NixOS default ("nixos").
   networking.hostName = "web01";
+
+  # Let wheel (schwim, finn) push store paths for `nixos-rebuild
+  # --target-host`. Wheel already has passwordless sudo, so this grants
+  # nothing new.
+  nix.settings.trusted-users = [ "root" "@wheel" ];
 
   # No Docker on this breed (default-on for guests via guests/base.nix).
   my.services.docker.enable = false;
