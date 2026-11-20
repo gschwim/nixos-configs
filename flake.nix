@@ -26,6 +26,22 @@
     # We only consume its nixosModule (evaluated against our own nixpkgs), so
     # its nixos-stable/unstable inputs are left as-is (no `follows` to dedupe).
     nixos-images.url = "github:nix-community/nixos-images";
+
+    # alyssadowdell.com site source (private). Served by web01 from the store
+    # (guests/workloads/web01.nix). Fetched over SSH through the `github-allys`
+    # host alias, which maps to github.com with the repo's own deploy key, so
+    # it never touches the nixos-configs deploy key. Whoever evaluates web01
+    # needs that alias in ~/.ssh/config (grokhq01 finn has it):
+    #   Host github-allys
+    #     HostName github.com
+    #     User git
+    #     IdentityFile ~/.ssh/allys_website_deploy   # KeePass has the key
+    #     IdentitiesOnly yes
+    # Update the site: `nix flake update allys-website`, commit flake.lock, deploy.
+    allys-website = {
+      url   = "git+ssh://git@github-allys/gschwim/allys-website";
+      flake = false;
+    };
   };
 
   outputs = inputs@{ self, nixpkgs, nixos-images, ... }:
@@ -45,6 +61,9 @@
         # siblings here, e.g.:
         #   guest-hermes = mkGuest { extraModules = [ ./guests/workloads/hermes.nix ]; };
         guest      = mkGuest { system = "x86_64-linux"; };
+
+        # web01 — nginx front end replacing fw02 (no Docker). See the overlay.
+        web01      = mkGuest { system = "x86_64-linux"; extraModules = [ ./guests/workloads/web01.nix ]; };
       };
 
       # Exposed so `incus-guest build --extra-module <path>` can layer a

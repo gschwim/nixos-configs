@@ -1,6 +1,7 @@
 {
   imports = [
     ./base
+    ./users.nix
     ./host.nix
     ./boot/zfs.nix
     ./disko
@@ -11,6 +12,7 @@
     ./desktop
     ./services/openssh.nix
     ./services/xrdp.nix
+    ./services/docker.nix
     ./services/incus.nix
     ./virtualization/vfio.nix
     ./power/prevent-sleep.nix
