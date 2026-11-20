@@ -1,6 +1,6 @@
 # 7e7.co contact-form backend for web01. Imported by ./web01.nix.
 #
-# Source: Ferb's 7e7-site repo at 006255d (deploy/contact-module.nix; the handler
+# Source: Ferb's 7e7-site repo at f017700 (deploy/contact-module.nix; the handler
 # ./7e7-contact.py is backend/contact.py from the same commit, unmodified).
 # The handler is Python 3 stdlib only; it listens on 127.0.0.1:8790 and nginx proxies
 # https://www.7e7.co/api/contact to it (see nginx-web01.md).
@@ -37,7 +37,10 @@ in
         CONTACT_FROM_NAME   = "7e7 website";
         CONTACT_MAIL_TO     = "schwim@7e7.co";
         CONTACT_HELO        = "www.7e7.co";
-        CONTACT_TRUST_PROXY = "1";        # client IP from nginx's X-Real-IP (loopback peer only)
+        CONTACT_TRUST_PROXY = "1";        # client IP from nginx X-Real-IP / X-Forwarded-For (loopback peer only)
+        CONTACT_MIN_SECONDS = "3";        # silent-drop submissions faster than this (fill-time token)
+        CONTACT_RATE_PER_IP = "5";        # in-process backstop; nginx limit_req is burst 3 + 1r/m
+        CONTACT_RATE_WINDOW = "3600";     # seconds (5 per hour)
         PYTHONUNBUFFERED    = "1";
         # Option: authenticated submission instead of port 25. Put the mailbox password in a
         # root-only file outside the store (from KeePass) and uncomment:

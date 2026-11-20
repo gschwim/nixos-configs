@@ -8,6 +8,17 @@
        website (honeypot, must be empty), token (from GET)
 
 Sends one plain-text mail per accepted submission via SMTP. Logs outcome only (never bodies).
+
+Anti-spam (no third-party scripts):
+  1. Honeypot: a non-empty `website` field is dropped. The response is the same
+     200 {"ok":true} a real submission gets; nothing is mailed.
+  2. Fill-time token: contact.js fetches a signed timestamp on page load. Submissions
+     faster than CONTACT_MIN_SECONDS, or with a missing/invalid token, are dropped
+     the same silent-200 way. An expired token (tab left open too long) still
+     returns 400 so a real visitor can reload and try again.
+  3. Per-IP rate limit: in-process backstop (CONTACT_RATE_PER_IP per
+     CONTACT_RATE_WINDOW). nginx also applies limit_req (see deploy/nginx-web01.md).
+
 Configuration (environment):
   CONTACT_LISTEN       127.0.0.1:8790
   CONTACT_SMTP_HOST    smtp.bitrail.com
@@ -16,9 +27,9 @@ Configuration (environment):
   CONTACT_SMTP_USER / CONTACT_SMTP_PASSWORD_FILE      optional AUTH (e.g. port 587 submission)
   CONTACT_MAIL_FROM    noreply@7e7.co      CONTACT_FROM_NAME  7e7 website
   CONTACT_MAIL_TO      schwim@7e7.co
-  CONTACT_TRUST_PROXY  1   (take client IP from X-Real-IP when the peer is loopback)
+  CONTACT_TRUST_PROXY  1   (client IP from X-Real-IP or X-Forwarded-For when the peer is loopback)
   CONTACT_MIN_SECONDS  3     CONTACT_MAX_TOKEN_AGE 7200
-  CONTACT_RATE_PER_IP  5 per CONTACT_RATE_WINDOW 600 s;  CONTACT_RATE_GLOBAL 60 per window
+  CONTACT_RATE_PER_IP  5 per CONTACT_RATE_WINDOW 3600 s;  CONTACT_RATE_GLOBAL 60 per window
 """
 import hashlib, hmac, json, logging, os, re, secrets, smtplib, ssl, sys, threading, time
 from collections import deque
@@ -43,7 +54,7 @@ MIN_SECONDS = float(E('CONTACT_MIN_SECONDS', '3'))
 MAX_TOKEN_AGE = float(E('CONTACT_MAX_TOKEN_AGE', '7200'))
 RATE_PER_IP = int(E('CONTACT_RATE_PER_IP', '5'))
 RATE_GLOBAL = int(E('CONTACT_RATE_GLOBAL', '60'))
-RATE_WINDOW = float(E('CONTACT_RATE_WINDOW', '600'))
+RATE_WINDOW = float(E('CONTACT_RATE_WINDOW', '3600'))
 MAX_BODY = 32 * 1024
 LIMITS = {'name': 100, 'email': 254, 'phone': 40, 'contact_method': 10, 'message': 5000}
 SECRET = secrets.token_bytes(32)   # per process; a restart only invalidates open forms' tokens
@@ -81,15 +92,20 @@ def make_token(now=None):
     return ts + '.' + hmac.new(SECRET, ts.encode(), hashlib.sha256).hexdigest()[:32]
 
 def check_token(tok, now):
+    if not tok or not str(tok).strip():
+        return 'missing'
     try:
         ts, sig = tok.split('.', 1)
         good = hmac.new(SECRET, ts.encode(), hashlib.sha256).hexdigest()[:32]
-        if not hmac.compare_digest(sig, good): return 'expired'
+        if not hmac.compare_digest(sig, good):
+            return 'invalid'
         age = now - int(ts)
     except Exception:
+        return 'invalid'
+    if age < MIN_SECONDS:
+        return 'too_fast'
+    if age > MAX_TOKEN_AGE:
         return 'expired'
-    if age < MIN_SECONDS: return 'too_fast'
-    if age > MAX_TOKEN_AGE: return 'expired'
     return None
 
 class Invalid(Exception):
@@ -158,6 +174,18 @@ def send_mail(f, ip):
         try: s.quit()
         except Exception: pass
 
+def trusted_client_ip(peer, headers):
+    """Return the client IP. X-Real-IP / X-Forwarded-For are used only when the
+    immediate peer is loopback (nginx on the same host). nginx should set both
+    headers to $remote_addr so a client-supplied chain cannot be trusted."""
+    if TRUST_PROXY and peer in ('127.0.0.1', '::1'):
+        raw = (headers.get('X-Real-IP') or headers.get('X-Forwarded-For') or '').strip()
+        if raw:
+            cand = raw.split(',')[-1].strip()
+            if cand and len(cand) <= 64 and not any(c in cand for c in ' \r\n\t'):
+                return cand
+    return peer
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'contact'
     sys_version = ''
@@ -167,10 +195,7 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(35)
     def client_ip(self):
-        peer = self.client_address[0]
-        if TRUST_PROXY and peer in ('127.0.0.1', '::1'):
-            return (self.headers.get('X-Real-IP') or peer).strip()[:64]
-        return peer
+        return trusted_client_ip(self.client_address[0], self.headers)
     def reply(self, status, obj):
         b = json.dumps(obj).encode()
         self.send_response(status)
@@ -210,9 +235,9 @@ class Handler(BaseHTTPRequestHandler):
             log.info('drop ip=%s reason=honeypot', ip)
             return self.reply(200, {'ok': True})            # look successful to bots
         bad = check_token(str(d.get('token', '')), now)
-        if bad == 'too_fast':
-            log.info('reject ip=%s reason=too_fast', ip)
-            return self.reply(400, {'ok': False, 'error': 'Please take a moment and try again.'})
+        if bad in ('too_fast', 'missing', 'invalid'):
+            log.info('drop ip=%s reason=%s', ip, bad)
+            return self.reply(200, {'ok': True})            # same silent drop as the honeypot
         if bad:
             log.info('reject ip=%s reason=token', ip)
             return self.reply(400, {'ok': False, 'error': 'This form has expired. Please reload the page and try again.'})
@@ -229,10 +254,10 @@ class Handler(BaseHTTPRequestHandler):
         except smtplib.SMTPRecipientsRefused as e:
             r = list(e.recipients.values())[0]
             log.error('smtp_fail ip=%s rcpt_refused code=%s resp=%s', ip, r[0], r[1].decode(errors='replace')[:200])
-            return self.reply(502, {'ok': False, 'error': 'Unable to send right now. Please email info@7e7.co.'})
+            return self.reply(502, {'ok': False, 'error': 'Unable to send right now. Please try again later.'})
         except Exception as e:
             log.error('smtp_fail ip=%s err=%s: %s', ip, type(e).__name__, str(e)[:200])
-            return self.reply(502, {'ok': False, 'error': 'Unable to send right now. Please email info@7e7.co.'})
+            return self.reply(502, {'ok': False, 'error': 'Unable to send right now. Please try again later.'})
         log.info('sent ip=%s message_id=%s smtp="%s"', ip, mid, smtp_reply)
         self.reply(200, {'ok': True})
 
