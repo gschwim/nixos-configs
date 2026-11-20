@@ -45,6 +45,9 @@
         # siblings here, e.g.:
         #   guest-hermes = mkGuest { extraModules = [ ./guests/workloads/hermes.nix ]; };
         guest      = mkGuest { system = "x86_64-linux"; };
+
+        # web01 — nginx front end replacing fw02 (no Docker). See the overlay.
+        web01      = mkGuest { system = "x86_64-linux"; extraModules = [ ./guests/workloads/web01.nix ]; };
       };
 
       # Exposed so `incus-guest build --extra-module <path>` can layer a
