@@ -11,6 +11,7 @@
     ./desktop
     ./services/openssh.nix
     ./services/xrdp.nix
+    ./services/docker.nix
     ./services/incus.nix
     ./virtualization/vfio.nix
     ./power/prevent-sleep.nix
