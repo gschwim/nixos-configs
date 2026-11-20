@@ -40,6 +40,7 @@
     finn = {
       isNormalUser = true;
       description  = "Finn (Grok Bot admin)";
+      extraGroups  = [ "wheel" ];   # admin bot: passwordless sudo via base wheelNeedsPassword=false
       openssh.authorizedKeys.keys = [
         "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBMz2qbHIFb71rdfNSez8tECV0WJurCh0V+ere1DULJR finn@grokbot"
       ];
