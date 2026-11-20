@@ -23,6 +23,22 @@
         "type": "github"
       }
     },
+    "allys-website": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1795200845,
+        "narHash": "sha256-5PB9sg+xvScctY1+hpFiL84FEIqa5nbRDOVTNZUyKgI=",
+        "ref": "refs/heads/master",
+        "rev": "b33e99733645811462bfbc8e78896a9b76e37743",
+        "revCount": 5,
+        "type": "git",
+        "url": "ssh://git@github-allys/gschwim/allys-website"
+      },
+      "original": {
+        "type": "git",
+        "url": "ssh://git@github-allys/gschwim/allys-website"
+      }
+    },
     "darwin": {
       "inputs": {
         "nixpkgs": [
@@ -195,6 +211,7 @@
     "root": {
       "inputs": {
         "agenix": "agenix",
+        "allys-website": "allys-website",
         "disko": "disko",
         "home-manager": "home-manager_2",
         "nixos-hardware": "nixos-hardware",

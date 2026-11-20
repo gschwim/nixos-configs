@@ -25,8 +25,8 @@
 # storage-40GB then resizes the root disk. Gateway 172.16.0.254 and DNS
 # 172.16.1.253 come from the NET_* table in scripts/incus-launch.sh.)
 #
-# Content: static roots live under /var/www/<dir>, NOT in the store and NOT
-# in this repo. After launch, push them from the staged fw02 copy on grokhq01
+# Content: sundries, adventure_game, allsky live under /var/www/<dir>, NOT in
+# the store and NOT in this repo. After launch, push them from the staged fw02 copy on grokhq01
 # (Finn has sudo on web01):
 #
 #     SSH="ssh -i ~/.ssh/web01_deploy -o IdentitiesOnly=yes"
@@ -34,15 +34,10 @@
 #     rsync -a --delete --rsync-path="sudo rsync" --chown=root:root \
 #       --chmod=D755,F644 -e "$SSH" sundries adventure_game allsky \
 #       finn@172.16.0.240:/var/www/
-#     # alyssadowdell.com: site files only (what its Dockerfile ships, plus
-#     # robots.txt/sitemap.xml). Never .git, Dockerfile or build files.
-#     rsync -a --delete --rsync-path="sudo rsync" --chown=root:root \
-#       --chmod=D755,F644 -e "$SSH" --include=/index.html --include=/styles.css \
-#       --include=/robots.txt --include=/sitemap.xml --include=/images/*** \
-#       --exclude='*' alyssadowdell.com/ finn@172.16.0.240:/var/www/alyssadowdell.com/
 #
-#   fw02's live alyssadowdell.com index.html is NOT what's committed in
-#   gschwim/allys-website (HEAD 42a24ef), so it isn't built from the repo.
+#   alyssadowdell.com is NOT rsynced: it's built from gschwim/allys-website
+#   (flake input `allys-website`, see flake.nix) and served from the store.
+#   Update it: `nix flake update allys-website`, commit flake.lock, deploy.
 #   A rebuilt guest loses its root disk, so re-run the rsync after any relaunch.
 #
 # Deploy config changes from a commit on grokhq01 (finn's web01_deploy key;
@@ -58,8 +53,18 @@
 # certs are issued on their own. No DNS-01, no Cloudflare token.
 # Fallback (not active) per vhost: certs copied from fw02 — see `fw02Cert`.
 
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 let
+  # alyssadowdell.com: only the site files (what its Dockerfile ships, plus
+  # robots.txt/sitemap.xml) from the pinned allys-website input. .git,
+  # Dockerfile and build files never reach the store path nginx serves.
+  allysSite = pkgs.runCommand "alyssadowdell.com-site" { } ''
+    src=${inputs.allys-website}
+    mkdir -p $out
+    cp $src/index.html $src/styles.css $src/robots.txt $src/sitemap.xml $out/
+    cp -r $src/images $out/images
+  '';
+
   # Fallback only, not used by default. To serve a copied fw02 cert for a
   # name instead of ACME, replace `acme` with `fw02Cert "<name>"` in `tls`
   # for that vhost. Files live outside the store, readable by nginx:
@@ -237,7 +242,7 @@ in
 
       "alyssadowdell.com" = tls // {
         serverAliases = [ "www.alyssadowdell.com" ];
-        root = "/var/www/alyssadowdell.com";
+        root = "${allysSite}";
         extraConfig = ''
           index index.html;
         '';
