@@ -108,6 +108,11 @@ let
   '';
 in
 {
+  # 7e7.co contact-form backend (127.0.0.1:8790, proxied at www.7e7.co/api/contact).
+  imports = [ ./7e7-contact.nix ];
+  # Off until the form JS is enabled (Greg, 2026-11-20).
+  my.services.e7contact.enable = false;
+
   # Named instance: pin the hostname cloud-init gave it at launch, so a
   # nixos-rebuild switch doesn't revert it to the NixOS default ("nixos").
   networking.hostName = "web01";
@@ -156,6 +161,50 @@ in
     clientMaxBodySize        = "1m";    # nginx default, as on fw02
     appendHttpConfig = ''
       gzip on;
+
+      # www.7e7.co: canonical path for a legacy/unclean request, "" if it is
+      # already canonical. Decided on $request_uri (the original request), so
+      # internal redirects (index, error_page) never match. First match wins.
+      map $request_uri $e7_canon {
+          default "";
+          # Squarespace's /info duplicated the home page.
+          "~^/(?:www\.7e7\.co/)?info(?:\.html)?(?<e7_a1>\?.*)?$"  "/$e7_a1";
+          # Old mirror layout: /www.7e7.co/<page>.html -> /<page>
+          "~^/www\.7e7\.co(?:/(?<e7_p2>[^?]*?))?(?:/?index)?(?:\.html)?/*(?<e7_a2>\?.*)?$"  "/$e7_p2$e7_a2";
+          # /index.html -> /
+          "~^/index\.html(?<e7_a3>\?.*)?$"  "/$e7_a3";
+          # /<page>.html -> /<page>
+          "~^(?<e7_p4>/[^?]*?)(?:/index)?\.html(?<e7_a4>\?.*)?$"  "$e7_p4$e7_a4";
+          # /<page>/ -> /<page>
+          "~^(?<e7_p5>/[^?]*?[^/?])/+(?<e7_a5>\?.*)?$"  "$e7_p5$e7_a5";
+          # Legacy addresses from the Wayback Machine list.
+          "~^/defaultsite(?:\?.*)?$"                  "/";
+          "~^/cdn-cgi/l/email-protection(?:\?.*)?$"   "/contact-us";
+      }
+      # Where any redirect to www.7e7.co should land: the canonical path, or
+      # the request as-is when it is already canonical.
+      map $e7_canon $e7_dest {
+          ""      $request_uri;
+          default $e7_canon;
+      }
+      # Redirect for the www.7e7.co server (it listens on :80 and :443):
+      # http -> https://www.7e7.co<canonical> in ONE hop; https -> canonical
+      # only when needed. The ACME challenge on :80 is never redirected.
+      map "$scheme:$request_uri" $e7_redirect {
+          default                                    "";
+          "~^http:/\.well-known/acme-challenge/"     "";
+          "~^http:"                                  "https://www.7e7.co$e7_dest";
+          "~^https:"                                 $e7_canon;
+      }
+
+      # 7e7.co contact form: rate-limit POSTs per client IP (GETs carry an
+      # empty key and are not limited; the form fetches its fill-time token
+      # with a GET).
+      map $request_method $contact_limit_key {
+          POST    $binary_remote_addr;
+          default "";
+      }
+      limit_req_zone $contact_limit_key zone=contact:10m rate=5r/m;
     '';
     # No HSTS anywhere (fw02 has none).
 
@@ -326,17 +375,63 @@ in
         };
       };
 
-      # 7e7.co (Ferb's site). Content is Ferb's static mirror in
-      # /var/www/7e7.co; its top-level index.html redirects / to /www.7e7.co/.
-      "www.7e7.co" = tls // {
-        root = "/var/www/7e7.co";
+      # 7e7.co (Ferb's site). Static files in /var/www/7e7.co (Ferb deploys
+      # them, no sudo), served at clean URLs: /about is about.html. Legacy
+      # addresses 301 in one hop (see the $e7_* maps above).
+      #
+      # addSSL, not `tls` (forceSSL): forceSSL's :80 server is generated with
+      # a bare `return 301 https://$host$request_uri`, so a legacy http URL
+      # would take two hops (http → https, then → canonical). Here the same
+      # server answers :80 and :443 and $e7_redirect sends http straight to
+      # the final https URL. Nothing is served over plain http except the
+      # ACME challenge location NixOS adds to this server.
+      "www.7e7.co" = acme // {
+        addSSL = true;
+        http2  = false;
+        root   = "/var/www/7e7.co";
         extraConfig = ''
           index index.html;
+          error_page 404 /404.html;
+
+          # Server-level `if` that only returns: the safe use of `if`.
+          if ($e7_redirect) {
+              return 301 $e7_redirect;
+          }
         '';
         locations = {
-          # The site lives under /www.7e7.co/ (static mirror layout).
-          "= /".return = "301 /www.7e7.co/";
-          "/".tryFiles = "$uri $uri/ =404";
+          # $uri/ deliberately not tried: it would internally redirect / to
+          # /index.html, and the mirror's host directories would bounce
+          # between slash and no-slash.
+          "= /".tryFiles = "/index.html =404";
+          "/".tryFiles   = "$uri $uri.html =404";
+
+          # Custom 404 page; /404 itself answers 404 too.
+          "= /404.html".extraConfig = "internal;";
+          "= /404".return = "404";
+
+          # Contact form backend (./7e7-contact.nix). POST-only rate limit
+          # (zone `contact` above), 32k body cap, JSON errors.
+          "= /api/contact".extraConfig = ''
+            limit_except GET POST { deny all; }
+            limit_req zone=contact burst=3 nodelay;
+            limit_req_status 429;
+            client_max_body_size 32k;
+            error_page 413 = @contact_too_large;
+            error_page 429 = @contact_rate_limited;
+            proxy_pass http://127.0.0.1:8790;
+            proxy_set_header Host      $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 45s;
+          '';
+          "@contact_too_large".extraConfig = ''
+            default_type application/json;
+            return 413 '{"ok":false,"error":"Message is too large."}';
+          '';
+          "@contact_rate_limited".extraConfig = ''
+            default_type application/json;
+            return 429 '{"ok":false,"error":"Too many messages. Please try again later."}';
+          '';
+
           # Block dotfiles; ACME's ^~ prefix location still wins for
           # /.well-known/acme-challenge/.
           "~ /\\." = {
@@ -355,7 +450,8 @@ in
       "7e7.co" = acme // {
         addSSL = true;
         http2  = false;
-        locations."/".return = "301 https://www.7e7.co$request_uri";
+        # $e7_dest: legacy paths go straight to their canonical form too.
+        locations."/".return = "301 https://www.7e7.co$e7_dest";
       };
 
       # Signal → Obsidian helper.
